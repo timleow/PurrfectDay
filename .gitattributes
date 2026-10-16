@@ -144,3 +144,6 @@
 *.stl                filter=lfs diff=lfs merge=lfs -text
 *.nc                 filter=lfs diff=lfs merge=lfs -text
 *.mat                filter=lfs diff=lfs merge=lfs -text
+
+# These small web app icons are committed directly; Git LFS is not needed.
+public/*.png          -filter -diff -merge -text
