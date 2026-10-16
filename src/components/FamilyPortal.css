@@ -351,10 +351,12 @@
 .family-person-avatar,
 .family-cat-avatar,
 .family-cat-list img {
+  position: relative;
   display: grid;
   flex: 0 0 auto;
   width: 34px;
   height: 34px;
+  overflow: hidden;
   place-items: center;
   border-radius: 50%;
   color: #fff;
@@ -362,7 +364,15 @@
   font-weight: 800;
 }
 
-.family-person-avatar { background: #8da795; }
+.family-person-avatar { background: #8da795; isolation: isolate; }
+.family-person-avatar-fallback,
+.family-person-avatar-image { position: absolute; inset: 0; width: 100%; height: 100%; }
+.family-person-avatar-fallback { display: grid; place-items: center; background: #8da795; transition: opacity 220ms ease; }
+.family-person-avatar-fallback.is-hidden { opacity: 0; }
+.family-person-avatar-image { z-index: 1; object-fit: cover; opacity: 0; transform: scale(1.035); transition: opacity 260ms ease-out, transform 360ms cubic-bezier(.2, .75, .25, 1); }
+.family-person-avatar-image.is-loaded { opacity: 1; transform: scale(1); }
+.family-person-avatar.is-loading::after { position: absolute; z-index: 2; inset: 0; content: ""; background: linear-gradient(105deg, transparent 20%, rgba(255,255,255,.46) 48%, transparent 76%); transform: translateX(-100%); animation: family-avatar-shimmer 1.25s ease-in-out infinite; }
+@keyframes family-avatar-shimmer { to { transform: translateX(100%); } }
 .family-cat-avatar { color: #4b443f; }
 .family-cat-list img { object-fit: cover; }
 

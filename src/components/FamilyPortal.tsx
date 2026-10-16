@@ -20,6 +20,42 @@ function deviceTimezone() {
 
 type FamilyPortalCat = { id: number | string; name: string; color: string; initial: string; photo?: string };
 
+function googleProfilePhoto(user: User) {
+  const identityData = user.identities?.find((identity) => identity.provider === "google")?.identity_data;
+  const candidates = [
+    user.user_metadata?.avatar_url,
+    user.user_metadata?.picture,
+    identityData?.avatar_url,
+    identityData?.picture,
+  ];
+  return candidates.find((candidate): candidate is string => typeof candidate === "string" && candidate.startsWith("https://"));
+}
+
+function FamilyMemberAvatar({ name, photoUrl }: { name: string; photoUrl?: string | null }) {
+  const [loadedUrl, setLoadedUrl] = useState("");
+  const [failedUrl, setFailedUrl] = useState("");
+  const loaded = Boolean(photoUrl && loadedUrl === photoUrl);
+  const failed = Boolean(photoUrl && failedUrl === photoUrl);
+
+  return (
+    <span aria-hidden="true" className={`family-person-avatar ${photoUrl && !loaded && !failed ? "is-loading" : ""}`}>
+      <span className={`family-person-avatar-fallback ${loaded ? "is-hidden" : ""}`}>{name[0]?.toUpperCase()}</span>
+      {photoUrl && !failed && (
+        <img
+          alt=""
+          className={`family-person-avatar-image ${loaded ? "is-loaded" : ""}`}
+          decoding="async"
+          key={photoUrl}
+          loading="lazy"
+          onError={() => setFailedUrl(photoUrl)}
+          onLoad={() => setLoadedUrl(photoUrl)}
+          src={photoUrl}
+        />
+      )}
+    </span>
+  );
+}
+
 export default function FamilyPortal({ onClose, cats = [], onManageCats = () => {} }: { onClose: () => void; cats?: FamilyPortalCat[]; onManageCats?: () => void }) {
   const [session, setSession] = useState<Session | null>(null);
   const [family, setFamily] = useState<Family | null>(null);
@@ -228,13 +264,17 @@ export default function FamilyPortal({ onClose, cats = [], onManageCats = () => 
                   <button className="family-primary-button" disabled={busy} type="submit">Add person</button>
                 </form>
                 <ul className="family-member-list">
-                  {members.map((member) => (
-                    <li key={member.id}>
-                      <span className="family-person-avatar">{(member.display_name || member.email)[0]?.toUpperCase()}</span>
-                      <span className="family-member-identity"><strong>{member.display_name || member.email.split("@")[0]}</strong><small>{member.email}</small><small className="family-member-status">{member.user_id ? "Joined" : "Added"}</small></span>
-                      {member.user_id !== session.user.id && <button aria-label={`Remove ${member.display_name || member.email} from family`} className="family-remove-button" disabled={busy} onClick={() => void removePerson(member)} type="button">Remove</button>}
-                    </li>
-                  ))}
+                  {members.map((member) => {
+                    const memberName = member.display_name || member.email.split("@")[0];
+                    const ownPhoto = member.user_id === session.user.id ? googleProfilePhoto(session.user) : undefined;
+                    return (
+                      <li key={member.id}>
+                        <FamilyMemberAvatar name={memberName || member.email} photoUrl={member.avatar_url || ownPhoto} />
+                        <span className="family-member-identity"><strong>{memberName}</strong><small>{member.email}</small><small className="family-member-status">{member.user_id ? "Joined" : "Added"}</small></span>
+                        {member.user_id !== session.user.id && <button aria-label={`Remove ${memberName} from family`} className="family-remove-button" disabled={busy} onClick={() => void removePerson(member)} type="button">Remove</button>}
+                      </li>
+                    );
+                  })}
                 </ul>
               </section>
 

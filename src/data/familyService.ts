@@ -1,7 +1,7 @@
 import { supabase } from "./supabase";
 
 export type Family = { id: string; name: string; timezone: string };
-export type FamilyMember = { id: string; family_id: string; user_id: string | null; email: string; display_name: string; added_at: string };
+export type FamilyMember = { id: string; family_id: string; user_id: string | null; email: string; display_name: string; added_at: string; avatar_url?: string | null };
 export type CloudCat = { id: string; family_id: string; name: string; color: string; photo_path: string | null; archived_at: string | null };
 export type TargetRule = { id: string; family_id: string; cat_id: string; metric: string; cadence: "daily" | "weekly"; target_amount: number; unit: string; effective_from: string; effective_until: string | null };
 export type CareEvent = { id: string; family_id: string; cat_id: string; actor_user_id: string; metric: string; amount_delta: number; unit: string; detail: string; occurred_at: string };
@@ -40,7 +40,18 @@ export async function listFamilyMembers(familyId: string): Promise<FamilyMember[
     .eq("family_id", familyId)
     .order("added_at");
   if (error) throw error;
-  return (data ?? []) as FamilyMember[];
+  const members = (data ?? []) as FamilyMember[];
+  const userIds = members.flatMap((member) => member.user_id ? [member.user_id] : []);
+  if (!userIds.length) return members;
+
+  // Keep the family workspace usable before the profile-photo migration is applied.
+  const { data: profiles, error: profilesError } = await getClient()
+    .from("profiles")
+    .select("id,avatar_url")
+    .in("id", userIds);
+  if (profilesError) return members;
+  const avatars = new Map((profiles ?? []).map((profile) => [profile.id as string, profile.avatar_url as string | null]));
+  return members.map((member) => ({ ...member, avatar_url: member.user_id ? avatars.get(member.user_id) ?? null : null }));
 }
 
 export async function addFamilyMember(familyId: string, email: string, displayName: string) {

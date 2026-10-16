@@ -1784,7 +1784,7 @@ export default function App() {
           </div>
         </div>
       )}
-      <nav aria-label="Primary navigation" className="primary-nav">
+      <nav aria-label="Primary navigation" className={`primary-nav page-${activeTab}`}>
         <button aria-current={activeTab === "care" ? "page" : undefined} className={activeTab === "care" ? "active" : ""} disabled={cats.length === 0} onClick={returnToCare} type="button">
           <Icon name="paw" size={19} />
           <span>Care</span>
