@@ -14,6 +14,7 @@ These criteria turn the family-tracker decisions from the product conversation i
 - **FAM-2:** Family view loading shows a loading state until family and people have loaded.
 - **FAM-3:** A signed-in user can remove another family member. Removing the current signed-in member is not offered.
 - **AUTH-1:** Google sign-in is available. Apple sign-in is absent from this release's sign-in UI and setup copy.
+- **AUTH-2:** When Supabase is configured, signed-out users see a sign-in screen before any care or family data; an existing Supabase browser session resumes into the app.
 - **FAM-4:** Family timezone is assigned from the device during family creation and cannot be edited as free text in the family view.
 
 ## Care tracking
@@ -24,6 +25,8 @@ These criteria turn the family-tracker decisions from the product conversation i
 - **CARE-4:** The “Who fed?” count matches the tracked food amount, including partial wet-food progress, while its detail card retains individual check-in entries.
 - **CARE-5:** Undo is a small curved-arrow control at the upper-left of the tap card and is offered only after a check-in.
 - **CARE-6:** Undo belongs to the member who made the check-in. It reverses only that check-in's amount, preserving later family updates to the same tracker; it records a compensating care entry rather than deleting shared history.
+- **CARE-7:** Rapid numeric and wet-food taps each increment the displayed count and shared event total; local count updates do not wait for the debounced realtime refresh.
+- **CI-1:** GitHub Actions runs the tests, TypeScript check, and production build on pushes to `main` and pull requests.
 - **SYNC-1:** Realtime changes are debounced so a burst of shared updates triggers one refresh after activity settles; the app does not poll on a fixed interval.
 - **GOAL-1:** Daily food goals can be edited without the dialog closing or the value being overwritten while typing; changes are applied when the user confirms.
 - **PHOTO-1:** The cat photo/avatar is prominent in the selected-cat mobile picker and the larger tracker avatar.

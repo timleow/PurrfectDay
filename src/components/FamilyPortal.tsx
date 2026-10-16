@@ -11,6 +11,7 @@ import {
   type FamilyMember,
 } from "../data/familyService";
 import { isSupabaseConfigured, supabase } from "../data/supabase";
+import GoogleSignInButton from "./GoogleSignInButton";
 import "./FamilyPortal.css";
 
 function deviceTimezone() {
@@ -192,7 +193,7 @@ export default function FamilyPortal({ onClose, cats = [], onManageCats = () => 
             <h3>Sign in to get started</h3>
             <p>Create a family and give everyone their own account so the care log shows who did what. Add and manage cats from the Cats tab.</p>
             <div className="family-sign-in-actions">
-              <button disabled={busy} onClick={() => void signIn()} type="button">Continue with Google</button>
+              <GoogleSignInButton busy={busy} onClick={() => void signIn()} />
             </div>
           </div>
         ) : !family ? (

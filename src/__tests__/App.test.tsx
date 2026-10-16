@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -108,6 +108,20 @@ describe("care tracking corrections", () => {
     expect(counterStyles).toMatch(/width:\s*100%/);
     expect(counterStyles).toMatch(/font-variant-numeric:\s*tabular-nums/);
     expect(counterStyles).toMatch(/white-space:\s*nowrap/);
+  });
+
+  it("keeps every count when taps arrive before React can repaint", async () => {
+    const user = userEvent.setup();
+    const { container } = renderApp();
+    await user.click(within(container.querySelector(".mobile-item-grid")!).getByRole("button", { name: /Treats/ }));
+    const tapButton = screen.getByRole("button", { name: "Add one treats" });
+
+    act(() => {
+      for (let tap = 0; tap < 10; tap += 1) fireEvent.click(tapButton);
+    });
+
+    expect(screen.getByText("10 / 4")).not.toBeNull();
+    expect(screen.getByRole("button", { name: /Who fed\?/ }).querySelector("span")?.textContent).toBe("10");
   });
 
   it("uses a prominent selected cat avatar", () => {

@@ -1,0 +1,172 @@
+.sign-in-screen {
+  min-height: 100vh;
+  padding: 22px clamp(18px, 5vw, 64px) 30px;
+  color: #29342f;
+  background:
+    radial-gradient(ellipse at 50% 45%, rgba(239, 224, 203, .46), transparent 43%),
+    #f8f5ef;
+}
+
+.sign-in-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sign-in-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #29342f;
+  text-decoration: none;
+  font-family: "Fredoka", sans-serif;
+  font-size: 21px;
+  font-weight: 600;
+}
+
+.sign-in-brand > span:last-child > span { color: #dc8262; }
+
+.sign-in-brand-mark {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 13px;
+  color: #fff;
+  background: #dc8262;
+  box-shadow: 0 5px 12px rgba(185, 98, 67, .2);
+  font-size: 21px;
+}
+
+.sign-in-card {
+  display: flex;
+  width: min(100%, 430px);
+  min-height: 350px;
+  margin: max(9vh, 40px) auto 0;
+  padding: 42px 36px 38px;
+  align-items: center;
+  flex-direction: column;
+  justify-content: center;
+  border: 1px solid #eee5da;
+  border-radius: 28px;
+  background: rgba(255, 253, 249, .92);
+  box-shadow: 0 18px 55px rgba(76, 62, 43, .08);
+  text-align: center;
+}
+
+.sign-in-paw {
+  display: grid;
+  width: 58px;
+  height: 58px;
+  margin-bottom: 20px;
+  place-items: center;
+  border-radius: 20px;
+  color: #dc8262;
+  background: #fff0e8;
+  font-size: 27px;
+}
+
+.sign-in-eyebrow {
+  color: #798c7c;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.sign-in-card h1 {
+  margin: 9px 0 8px;
+  font-family: "Fredoka", sans-serif;
+  font-size: clamp(25px, 6vw, 32px);
+  font-weight: 600;
+}
+
+.sign-in-card > p {
+  max-width: 310px;
+  margin: 0 0 24px;
+  color: #898278;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.google-sign-in-button {
+  display: inline-flex;
+  min-height: 48px;
+  padding: 0 18px;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  border: 1px solid #dadce0;
+  border-radius: 12px;
+  color: #3c4043;
+  background: #fff;
+  box-shadow: 0 2px 4px rgba(60, 64, 67, .12);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  transition: transform .16s ease, box-shadow .16s ease, background-color .16s ease;
+}
+
+.google-sign-in-button:hover:not(:disabled) {
+  background: #f9fbff;
+  box-shadow: 0 3px 8px rgba(60, 64, 67, .18);
+  transform: translateY(-1px);
+}
+
+.google-sign-in-button:active:not(:disabled) { transform: scale(.98); }
+.google-sign-in-button:disabled { cursor: wait; opacity: .62; }
+
+.sign-in-loading {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  gap: 10px;
+  color: #778579;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.sign-in-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #dce6dc;
+  border-top-color: #718d78;
+  border-radius: 50%;
+  animation: sign-in-spin .8s linear infinite;
+}
+
+.sign-in-card > .sign-in-error {
+  margin: 15px 0 0;
+  color: #af5145;
+  font-size: 12px;
+}
+
+.sign-in-footer {
+  margin: 22px 0 0;
+  color: #a59c90;
+  text-align: center;
+  font-size: 11px;
+}
+
+@keyframes sign-in-spin { to { transform: rotate(360deg); } }
+
+:root[data-theme="dark"] .sign-in-screen {
+  color: #e8e8e1;
+  background: radial-gradient(ellipse at 50% 45%, rgba(79, 103, 84, .2), transparent 43%), #171d1a;
+}
+
+:root[data-theme="dark"] .sign-in-brand { color: #e8e8e1; }
+:root[data-theme="dark"] .sign-in-card { border-color: #353e39; background: #222825; }
+:root[data-theme="dark"] .sign-in-card > p,
+:root[data-theme="dark"] .sign-in-footer { color: #a8b1a8; }
+:root[data-theme="dark"] .google-sign-in-button { border-color: #46504a; }
+
+@media (max-width: 480px) {
+  .sign-in-screen { padding-top: 15px; }
+  .sign-in-card { min-height: 320px; margin-top: 12vh; padding: 34px 22px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .google-sign-in-button,
+  .sign-in-spinner { animation: none; transition: none; }
+}

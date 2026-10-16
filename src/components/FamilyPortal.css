@@ -139,6 +139,11 @@
   font-weight: 700;
 }
 
+.family-sign-in-actions .google-sign-in-button {
+  min-height: 40px;
+  gap: 8px;
+}
+
 .family-create-form {
   display: grid;
   gap: 13px;

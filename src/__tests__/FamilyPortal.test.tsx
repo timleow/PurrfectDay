@@ -70,7 +70,7 @@ describe("family release scope and workspace", () => {
   it("offers Google sign-in and leaves Apple sign-in out of scope", async () => {
     render(<FamilyPortal onClose={vi.fn()} />);
     expect(await screen.findByRole("heading", { name: "Sign in to get started" })).not.toBeNull();
-    expect(screen.getByRole("button", { name: "Continue with Google" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Continue with Google" }).querySelector("svg")).not.toBeNull();
     expect(screen.queryByRole("button", { name: /Apple/ })).toBeNull();
   });
 

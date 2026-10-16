@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import FamilyPortal from "./components/FamilyPortal";
 import CatsOverview from "./components/CatsOverview";
+import SignInScreen from "./components/SignInScreen";
 import { blobToDataUrl, compressCatPhoto } from "./data/catPhoto";
 import { addDateKeyDays, dateKeyInZone, getFamilyCareWindow, startOfDayInZone } from "./data/dateWindows";
 import { debounce } from "./data/debounce";
@@ -636,6 +637,8 @@ export default function App() {
     return saved ? JSON.parse(saved) : [];
   });
   const [cloudSession, setCloudSession] = useState<{ user: { id: string; email?: string } } | null>(null);
+  const [authLoading, setAuthLoading] = useState(isSupabaseConfigured);
+  const [authBusy, setAuthBusy] = useState(false);
   const [cloudFamily, setCloudFamily] = useState<Family | null>(null);
   const [cloudMembers, setCloudMembers] = useState<FamilyMember[]>([]);
   const [cloudEvents, setCloudEvents] = useState<CareEvent[]>([]);
@@ -693,15 +696,40 @@ export default function App() {
   useEffect(() => {
     if (!isSupabaseConfigured || !supabase) return;
     let active = true;
-    void supabase.auth.getSession().then(({ data }) => {
-      if (active) setCloudSession(data.session);
+    void supabase.auth.getSession().then(({ data, error }) => {
+      if (!active) return;
+      setCloudSession(data.session);
+      setAuthLoading(false);
+      if (error) setCloudError(error.message);
+    }).catch((cause: unknown) => {
+      if (!active) return;
+      setAuthLoading(false);
+      setCloudError(cause instanceof Error ? cause.message : "Could not check your sign-in.");
     });
-    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => setCloudSession(session));
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setCloudSession(session);
+      setAuthLoading(false);
+      setCloudError("");
+    });
     return () => {
       active = false;
       authListener.subscription.unsubscribe();
     };
   }, []);
+
+  const startGoogleSignIn = async () => {
+    if (!supabase) return;
+    setAuthBusy(true);
+    setCloudError("");
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: window.location.origin },
+    });
+    if (error) {
+      setCloudError(error.message);
+      setAuthBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (!isSupabaseConfigured || !cloudSession?.user.id) {
@@ -1076,21 +1104,29 @@ export default function App() {
 
   const handleBigTap = () => {
     if (activeMetric === "cans") {
-      const nextProgress = tracker.canProgress + 10;
       const amountDelta = 0.1;
       setUndoAction({ catId: selectedId, metric: "cans", amountDelta, actorUserId: cloudSession?.user.id });
-      addCareLog("cans", nextProgress >= 100 ? "Completed 1 can" : "Added 10% of a can", amountDelta);
+      addCareLog("cans", "Added 10% of a can", amountDelta);
       setTrackers((current) => ({
         ...current,
-        [selectedId]: {
-          ...emptyTracker,
-          ...(current[selectedId] ?? {}),
-          cans: tracker.cans + (nextProgress >= 100 ? 1 : 0),
-          canProgress: nextProgress >= 100 ? 0 : nextProgress,
-        },
+        [selectedId]: (() => {
+          const latest = { ...emptyTracker, ...(current[selectedId] ?? {}) };
+          const nextProgress = latest.canProgress + 10;
+          return {
+            ...latest,
+            cans: latest.cans + (nextProgress >= 100 ? 1 : 0),
+            canProgress: nextProgress >= 100 ? 0 : nextProgress,
+          };
+        })(),
       }));
     } else if (typeof activeValue === "number") {
-      update(activeMetric, activeValue + 1);
+      const unit = metricUnits[activeMetric] ?? "";
+      const displayUnit = unit.replace(/s$/, "");
+      addCareLog(activeMetric, `Added 1${displayUnit ? ` ${displayUnit}` : ""}`, 1);
+      setTrackers((current) => {
+        const latest = { ...emptyTracker, ...(current[selectedId] ?? {}) };
+        return { ...current, [selectedId]: { ...latest, [activeMetric]: Number(latest[activeMetric]) + 1 } };
+      });
       setUndoAction({ catId: selectedId, metric: activeMetric, amountDelta: 1, actorUserId: cloudSession?.user.id });
     } else {
       if (!activeValue && (activeMetric === "peed" || activeMetric === "pooped")) {
@@ -1128,6 +1164,10 @@ export default function App() {
     });
     addCareLog(undoAction.metric, `Removed ${amountText}${displayUnit ? ` ${displayUnit}` : ""}`, -amountDelta);
   };
+
+  if (isSupabaseConfigured && (!cloudSession || authLoading)) {
+    return <SignInScreen busy={authBusy} error={cloudError} loading={authLoading} onSignIn={() => void startGoogleSignIn()} toolbar={themeToggle} />;
+  }
 
   return (
     <div className="app-root">
