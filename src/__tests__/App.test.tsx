@@ -197,7 +197,8 @@ describe("care tracking corrections", () => {
     expect(whoFedButton.querySelector("span")?.textContent).toBe("1");
     await user.click(whoFedButton);
     expect(container.querySelector(".record-card-heading > span")?.textContent).toBe("1");
-    expect(container.querySelectorAll(".record-card-list li")).toHaveLength(10);
+    expect(container.querySelectorAll(".record-card-list li")).toHaveLength(1);
+    expect(container.querySelector(".record-card-list")?.textContent).toContain("Added 100% of a can");
   });
 
   it("keeps the goal editor open while typing and saves the chosen quantity", async () => {
