@@ -57,7 +57,7 @@ a:focus-visible {
 .app-shell:not(.family-route-hidden) > main,
 .cats-page,
 .family-portal-page {
-  animation: route-enter 200ms ease-out both;
+  animation: route-enter 100ms ease-out both;
 }
 
 @keyframes route-enter {
@@ -362,7 +362,7 @@ main {
   background: #eaf2eb;
   content: "";
   pointer-events: none;
-  transition: transform 360ms cubic-bezier(.22, 1, .36, 1), background-color 260ms ease;
+  transition: transform 180ms cubic-bezier(.22, 1, .36, 1), background-color 160ms ease;
 }
 
 .primary-nav.page-cats::before {
@@ -401,7 +401,7 @@ main {
 }
 
 .primary-nav button.active .icon {
-  animation: nav-icon-settle 300ms cubic-bezier(.22, 1, .36, 1);
+  animation: nav-icon-settle 160ms cubic-bezier(.22, 1, .36, 1);
 }
 
 @keyframes nav-icon-settle {
