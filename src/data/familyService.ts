@@ -1,0 +1,156 @@
+import { supabase } from "./supabase";
+
+export type Family = { id: string; name: string; timezone: string };
+export type FamilyMember = { id: string; family_id: string; user_id: string | null; email: string; display_name: string; added_at: string };
+export type CloudCat = { id: string; family_id: string; name: string; color: string; photo_path: string | null; archived_at: string | null };
+export type TargetRule = { id: string; family_id: string; cat_id: string; metric: string; cadence: "daily" | "weekly"; target_amount: number; unit: string; effective_from: string; effective_until: string | null };
+export type CareEvent = { id: string; family_id: string; cat_id: string; actor_user_id: string; metric: string; amount_delta: number; unit: string; detail: string; occurred_at: string };
+
+function getClient() {
+  if (!supabase) throw new Error("Supabase is not configured. Add the project URL and publishable key to .env.local.");
+  return supabase;
+}
+
+export async function createFamily(name: string, timezone: string) {
+  const { data, error } = await getClient().rpc("create_family", { p_name: name, p_timezone: timezone });
+  if (error) throw error;
+  return data as Family;
+}
+
+export async function getMyFamily(userId: string): Promise<Family | null> {
+  const { data, error } = await getClient()
+    .from("family_members")
+    .select("family:families(id,name,timezone)")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw error;
+  const family = data?.family;
+  return (Array.isArray(family) ? family[0] : family) as Family | null;
+}
+
+export async function updateFamily(familyId: string, changes: Pick<Family, "name">) {
+  const { error } = await getClient().from("families").update(changes).eq("id", familyId);
+  if (error) throw error;
+}
+
+export async function listFamilyMembers(familyId: string): Promise<FamilyMember[]> {
+  const { data, error } = await getClient()
+    .from("family_members")
+    .select("id,family_id,user_id,email,display_name,added_at")
+    .eq("family_id", familyId)
+    .order("added_at");
+  if (error) throw error;
+  return (data ?? []) as FamilyMember[];
+}
+
+export async function addFamilyMember(familyId: string, email: string, displayName: string) {
+  const { data, error } = await getClient().rpc("add_family_member", {
+    p_family_id: familyId,
+    p_email: email,
+    p_display_name: displayName,
+  });
+  if (error) throw error;
+  return data as FamilyMember;
+}
+
+export async function removeFamilyMember(memberId: string) {
+  const { error } = await getClient().rpc("remove_family_member", { p_member_id: memberId });
+  if (error) throw error;
+}
+
+export async function listCats(familyId: string): Promise<CloudCat[]> {
+  const { data, error } = await getClient()
+    .from("cats")
+    .select("id,family_id,name,color,photo_path,archived_at")
+    .eq("family_id", familyId)
+    .is("archived_at", null)
+    .order("created_at");
+  if (error) throw error;
+  return (data ?? []) as CloudCat[];
+}
+
+export async function addCat(familyId: string, name: string, color: string) {
+  const { data: authData, error: authError } = await getClient().auth.getUser();
+  if (authError) throw authError;
+  if (!authData.user) throw new Error("Sign in again to add a cat.");
+  const { data, error } = await getClient()
+    .from("cats")
+    .insert({ family_id: familyId, name: name.trim(), color, created_by: authData.user.id })
+    .select("id,family_id,name,color,photo_path,archived_at")
+    .single();
+  if (error) throw error;
+  return data as CloudCat;
+}
+
+export async function updateCat(catId: string, changes: Partial<Pick<CloudCat, "name" | "color" | "photo_path">>) {
+  const { error } = await getClient().from("cats").update(changes).eq("id", catId);
+  if (error) throw error;
+}
+
+export async function archiveCat(catId: string) {
+  const { error } = await getClient().from("cats").update({ archived_at: new Date().toISOString() }).eq("id", catId);
+  if (error) throw error;
+}
+
+export async function uploadCatPhoto(familyId: string, catId: string, file: File) {
+  const client = getClient();
+  const extension = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
+  const path = `${familyId}/${catId}/${crypto.randomUUID()}.${extension}`;
+  const { error: uploadError } = await client.storage.from("cat-photos").upload(path, file, { upsert: false, contentType: file.type });
+  if (uploadError) throw uploadError;
+  const { error: updateError } = await client.from("cats").update({ photo_path: path }).eq("id", catId);
+  if (updateError) throw updateError;
+  return path;
+}
+
+export async function getCatPhotoUrl(path: string) {
+  const { data, error } = await getClient().storage.from("cat-photos").createSignedUrl(path, 60 * 60);
+  if (error) throw error;
+  return data.signedUrl;
+}
+
+export async function listTargets(familyId: string): Promise<TargetRule[]> {
+  const { data, error } = await getClient().from("target_rules").select("*").eq("family_id", familyId).is("effective_until", null);
+  if (error) throw error;
+  return (data ?? []) as TargetRule[];
+}
+
+export async function saveTarget(familyId: string, catId: string, metric: string, cadence: "daily" | "weekly", targetAmount: number, unit: string, effectiveFrom = new Date().toISOString().slice(0, 10)) {
+  const { data: authData, error: authError } = await getClient().auth.getUser();
+  if (authError) throw authError;
+  if (!authData.user) throw new Error("Sign in again to change a target.");
+  const { error } = await getClient().from("target_rules").upsert({
+    family_id: familyId,
+    cat_id: catId,
+    metric,
+    cadence,
+    target_amount: targetAmount,
+    unit,
+    created_by: authData.user.id,
+    effective_from: effectiveFrom,
+  }, { onConflict: "cat_id,metric,cadence,effective_from" });
+  if (error) throw error;
+}
+
+export async function listCareEvents(familyId: string, from: string, until: string): Promise<CareEvent[]> {
+  const { data, error } = await getClient()
+    .from("care_events")
+    .select("id,family_id,cat_id,actor_user_id,metric,amount_delta,unit,detail,occurred_at")
+    .eq("family_id", familyId)
+    .gte("occurred_at", from)
+    .lt("occurred_at", until)
+    .order("occurred_at", { ascending: false })
+    .limit(500);
+  if (error) throw error;
+  return (data ?? []) as CareEvent[];
+}
+
+export async function recordCareEvent(event: Omit<CareEvent, "id" | "actor_user_id">) {
+  const { data, error } = await getClient()
+    .from("care_events")
+    .insert(event)
+    .select("id,family_id,cat_id,actor_user_id,metric,amount_delta,unit,detail,occurred_at")
+    .single();
+  if (error) throw error;
+  return data as CareEvent;
+}

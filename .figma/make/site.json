@@ -1,0 +1,10 @@
+{
+  "description": "Track your cat's daily food, health, and play activities with a playful, user-friendly interface designed to keep your feline happy and healthy.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

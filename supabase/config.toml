@@ -1,0 +1,25 @@
+project_id = "purrfectday"
+
+[api]
+enabled = true
+schemas = ["public", "storage"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+major_version = 15
+
+[db.seed]
+enabled = false
+
+[auth]
+enabled = true
+site_url = "http://localhost:8443"
+additional_redirect_urls = ["http://127.0.0.1:8443"]
+enable_signup = true
+
+[auth.external.google]
+enabled = false
+
+[auth.external.apple]
+enabled = false
