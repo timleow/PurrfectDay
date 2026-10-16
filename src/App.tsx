@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import FamilyPortal from "./components/FamilyPortal";
 import CatsOverview from "./components/CatsOverview";
 import SignInScreen from "./components/SignInScreen";
-import { blobToDataUrl, compressCatPhoto } from "./data/catPhoto";
+import { blobToDataUrl, compressCatPhoto, cropCatPhoto } from "./data/catPhoto";
 import { addDateKeyDays, dateKeyInZone, getFamilyCareWindow, startOfDayInZone } from "./data/dateWindows";
 import { debounce } from "./data/debounce";
 import { canUndoCareAction, undoNumericDelta, undoWetFoodDelta } from "./data/undoCareAction";
@@ -729,6 +729,8 @@ export default function App() {
   const [goalDrafts, setGoalDrafts] = useState<Record<FoodGoalKey, string>>({ treatsGoal: "4", kibbleGoal: "3", cansGoal: "1" });
   const [newCatName, setNewCatName] = useState("");
   const [newCatPhoto, setNewCatPhoto] = useState<string | undefined>();
+  const [newCatPhotoPosition, setNewCatPhotoPosition] = useState({ x: 50, y: 50 });
+  const catPhotoCropDrag = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
   const [photoError, setPhotoError] = useState("");
   const [memberName, setMemberName] = useState(() => localStorage.getItem("purrfect-member-name") ?? "");
   const [careLogs, setCareLogs] = useState<CareLog[]>(() => {
@@ -1113,12 +1115,21 @@ export default function App() {
     const name = newCatName.trim();
     if (!name) return;
     const colors = ["#D494B7", "#79B8A9", "#E2AA55", "#9D90CB", "#EE8D75"];
+    let croppedPhoto: string | undefined;
+    if (newCatPhoto) {
+      try {
+        croppedPhoto = await cropCatPhoto(newCatPhoto, newCatPhotoPosition);
+      } catch (cause) {
+        setPhotoError(errorMessage(cause, "Could not prepare the cat photo crop."));
+        return;
+      }
+    }
     if (cloudFamily) {
       try {
         const created = await addCloudCat(cloudFamily.id, name, colors[cats.length % colors.length]);
         let photo: string | undefined;
-        if (newCatPhoto) {
-          const blob = await fetch(newCatPhoto).then((response) => response.blob());
+        if (croppedPhoto) {
+          const blob = await fetch(croppedPhoto).then((response) => response.blob());
           const file = new File([blob], `${name}-photo.jpg`, { type: blob.type || "image/jpeg" });
           const path = await uploadCatPhoto(cloudFamily.id, created.id, file);
           photo = await getCatPhotoUrl(path);
@@ -1129,6 +1140,8 @@ export default function App() {
         setSelectedId(created.id);
         setNewCatName("");
         setNewCatPhoto(undefined);
+        setNewCatPhotoPosition({ x: 50, y: 50 });
+        setPhotoError("");
         setShowAddCat(false);
       } catch (cause) {
         setCloudError(cause instanceof Error ? cause.message : "Could not add that cat to the family.");
@@ -1140,12 +1153,14 @@ export default function App() {
       name,
       color: colors[cats.length % colors.length],
       initial: name[0].toUpperCase(),
-      photo: newCatPhoto,
+      photo: croppedPhoto,
     };
     setCats((current) => [...current, cat]);
     setSelectedId(cat.id);
     setNewCatName("");
     setNewCatPhoto(undefined);
+    setNewCatPhotoPosition({ x: 50, y: 50 });
+    setPhotoError("");
     setShowAddCat(false);
   };
 
@@ -1722,18 +1737,68 @@ export default function App() {
                     if (file) {
                       try {
                         setNewCatPhoto(await readCatPhoto(file));
+                        setNewCatPhotoPosition({ x: 50, y: 50 });
                         setPhotoError("");
                       } catch (cause) {
                         setPhotoError(errorMessage(cause, "Could not decode this photo."));
                       }
+                    } else {
+                      setNewCatPhoto(undefined);
                     }
+                    event.target.value = "";
                   }}
                 />
               </span>
             </label>
+            {newCatPhoto && (
+              <div className="cat-photo-crop-section">
+                <div
+                  aria-label="Cat photo circular crop preview. Drag the photo to adjust the crop."
+                  className="cat-photo-crop-preview"
+                  onPointerDown={(event) => {
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    catPhotoCropDrag.current = {
+                      pointerId: event.pointerId,
+                      startX: event.clientX,
+                      startY: event.clientY,
+                      originX: newCatPhotoPosition.x,
+                      originY: newCatPhotoPosition.y,
+                    };
+                  }}
+                  onPointerMove={(event) => {
+                    const drag = catPhotoCropDrag.current;
+                    if (!drag || drag.pointerId !== event.pointerId) return;
+                    const bounds = event.currentTarget.getBoundingClientRect();
+                    const clamp = (value: number) => Math.min(100, Math.max(0, value));
+                    setNewCatPhotoPosition({
+                      x: clamp(drag.originX - ((event.clientX - drag.startX) / bounds.width) * 100),
+                      y: clamp(drag.originY - ((event.clientY - drag.startY) / bounds.height) * 100),
+                    });
+                  }}
+                  onPointerUp={() => { catPhotoCropDrag.current = null; }}
+                  onPointerCancel={() => { catPhotoCropDrag.current = null; }}
+                  role="group"
+                  style={{ touchAction: "none" }}
+                >
+                  <img alt="" draggable={false} src={newCatPhoto} style={{ objectPosition: `${newCatPhotoPosition.x}% ${newCatPhotoPosition.y}%` }} />
+                  <span aria-hidden="true" className="cat-photo-crop-frame" />
+                </div>
+                <p>Drag the photo to choose what appears in the circle.</p>
+                <div className="cat-photo-crop-controls">
+                  <label>
+                    Horizontal crop
+                    <input aria-label="Horizontal photo crop" max="100" min="0" onChange={(event) => setNewCatPhotoPosition((position) => ({ ...position, x: Number(event.target.value) }))} type="range" value={newCatPhotoPosition.x} />
+                  </label>
+                  <label>
+                    Vertical crop
+                    <input aria-label="Vertical photo crop" max="100" min="0" onChange={(event) => setNewCatPhotoPosition((position) => ({ ...position, y: Number(event.target.value) }))} type="range" value={newCatPhotoPosition.y} />
+                  </label>
+                </div>
+              </div>
+            )}
             {photoError && <small className="photo-error">{photoError}</small>}
             <div className="modal-actions">
-              <button type="button" onClick={() => setShowAddCat(false)}>Cancel</button>
+              <button type="button" onClick={() => { setShowAddCat(false); setNewCatPhoto(undefined); setNewCatPhotoPosition({ x: 50, y: 50 }); setPhotoError(""); }}>Cancel</button>
               <button type="submit" disabled={!newCatName.trim()}><Icon name="plus" size={17} /> Add cat</button>
             </div>
           </form>

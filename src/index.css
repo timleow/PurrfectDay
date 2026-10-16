@@ -1171,6 +1171,8 @@ h1 {
 
 .modal {
   width: min(100%, 400px);
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
   padding: 30px;
   border-radius: 24px;
   background: #fffdf9;
@@ -1363,6 +1365,50 @@ h1 {
   outline: 2px solid #8ab09a;
   outline-offset: 2px;
 }
+
+.cat-photo-crop-section {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.cat-photo-crop-preview {
+  position: relative;
+  width: 176px;
+  height: 176px;
+  overflow: hidden;
+  border: 3px solid #fffdf9;
+  border-radius: 50%;
+  background: #e9e3d9;
+  box-shadow: 0 0 0 1px #d9d1c6, 0 5px 16px rgba(54, 48, 39, .14);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.cat-photo-crop-preview:active { cursor: grabbing; }
+.cat-photo-crop-preview img { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.cat-photo-crop-frame { position: absolute; inset: 0; border: 1px solid rgba(255, 255, 255, .8); border-radius: 50%; pointer-events: none; }
+
+.cat-photo-crop-section > p {
+  margin: 0;
+  color: #938d84;
+  font-size: 11px;
+  font-weight: 500;
+  text-align: center;
+}
+
+.cat-photo-crop-controls {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 3px;
+}
+
+.cat-photo-crop-controls label { gap: 4px; font-size: 10px; }
+.modal .cat-photo-crop-controls input[type="range"] { width: 100%; padding: 0; accent-color: #57806e; }
 
 .quota-modal .modal-actions button {
   color: #fff;

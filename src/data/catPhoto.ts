@@ -74,3 +74,29 @@ export function blobToDataUrl(blob: Blob): Promise<string> {
     reader.readAsDataURL(blob);
   });
 }
+
+export function cropCatPhoto(dataUrl: string, position: { x: number; y: number }): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onerror = () => reject(new Error("Could not prepare the cat photo crop."));
+    image.onload = () => {
+      const side = Math.min(image.naturalWidth, image.naturalHeight);
+      const maxX = image.naturalWidth - side;
+      const maxY = image.naturalHeight - side;
+      const sourceX = maxX * Math.min(100, Math.max(0, position.x)) / 100;
+      const sourceY = maxY * Math.min(100, Math.max(0, position.y)) / 100;
+      const outputSize = Math.min(side, 512);
+      const canvas = document.createElement("canvas");
+      canvas.width = outputSize;
+      canvas.height = outputSize;
+      const context = canvas.getContext("2d");
+      if (!context) {
+        reject(new Error("Could not prepare the cat photo crop."));
+        return;
+      }
+      context.drawImage(image, sourceX, sourceY, side, side, 0, 0, outputSize, outputSize);
+      resolve(canvas.toDataURL("image/jpeg", 0.88));
+    };
+    image.src = dataUrl;
+  });
+}
