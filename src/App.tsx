@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import FamilyPortal from "./components/FamilyPortal";
 import CatsOverview from "./components/CatsOverview";
 import SignInScreen from "./components/SignInScreen";
@@ -95,6 +95,15 @@ type CareLog = {
   timestamp: string;
 };
 
+type PendingCareAction = {
+  id: string;
+  catId: string;
+  metric: TrackableKey;
+  amountDelta: number;
+  timestamp: string;
+  eventId?: string;
+};
+
 type FoodGoalKey = "treatsGoal" | "kibbleGoal" | "cansGoal";
 type UndoAction = { catId: number | string; metric: TrackableKey; amountDelta: number; actorUserId?: string };
 
@@ -182,6 +191,18 @@ function trackerFromCloud(catId: string, events: CareEvent[], targets: TargetRul
     earsWeek: sum("ear_cleaning", weekStart, tomorrow) > 0 ? window.weekStart : "",
     played: Math.max(0, sum("play", dayStart, tomorrow)),
   };
+}
+
+function applyCareAction(tracker: Tracker, metric: TrackableKey, amountDelta: number): Tracker {
+  if (metric === "cans") {
+    const amount = Math.max(0, tracker.cans + tracker.canProgress / 100 + amountDelta);
+    const cans = Math.floor(amount + 0.000001);
+    return { ...tracker, cans, canProgress: Math.round((amount - cans) * 100) };
+  }
+  if (metric === "fountain" || metric === "pooped" || metric === "peed" || metric === "ears") {
+    return { ...tracker, [metric]: amountDelta > 0 };
+  }
+  return { ...tracker, [metric]: Math.max(0, Number(tracker[metric]) + amountDelta) };
 }
 
 function getLogMetric(entry: CareLog): TrackableKey {
@@ -642,12 +663,17 @@ export default function App() {
   const [cloudFamily, setCloudFamily] = useState<Family | null>(null);
   const [cloudMembers, setCloudMembers] = useState<FamilyMember[]>([]);
   const [cloudEvents, setCloudEvents] = useState<CareEvent[]>([]);
+  const pendingCareActions = useRef(new Map<string, PendingCareAction>());
   const [cloudTargets, setCloudTargets] = useState<TargetRule[]>([]);
   const [cloudError, setCloudError] = useState("");
   const [cloudRefreshTick, setCloudRefreshTick] = useState(0);
   const [careLogExpanded, setCareLogExpanded] = useState(false);
   const [showBreakdown, setShowBreakdown] = useState(false);
-  const [activeMetric, setActiveMetric] = useState<TrackableKey>("treats");
+  const [activeMetric, setActiveMetric] = useState<TrackableKey>(() => {
+    const savedMetric = localStorage.getItem("purrfect-active-metric");
+    const trackableKeys: TrackableKey[] = ["treats", "kibble", "cans", "teethPawing", "fountain", "pooped", "peed", "ears", "played"];
+    return trackableKeys.includes(savedMetric as TrackableKey) ? savedMetric as TrackableKey : "treats";
+  });
   const [tapBurst, setTapBurst] = useState(0);
   const [undoAction, setUndoAction] = useState<UndoAction | null>(null);
 
@@ -667,6 +693,10 @@ export default function App() {
       <span>{theme === "dark" ? "Light mode" : "Dark mode"}</span>
     </button>
   );
+
+  useEffect(() => {
+    localStorage.setItem("purrfect-active-metric", activeMetric);
+  }, [activeMetric]);
 
   const returnToCare = () => setActiveTab("care");
 
@@ -733,6 +763,7 @@ export default function App() {
 
   useEffect(() => {
     if (!isSupabaseConfigured || !cloudSession?.user.id) {
+      pendingCareActions.current.clear();
       setCloudFamily(null);
       setCloudMembers([]);
       setCloudEvents([]);
@@ -814,7 +845,31 @@ export default function App() {
         if (!appCats.length) setShowAddCat(true);
         setCareLogs(appLogs);
         setMemberName(actorNames.get(cloudSession.user.id) ?? cloudSession.user.email?.split("@")[0] ?? "Family member");
-        setTrackers(Object.fromEntries(remoteCats.map((cat) => [cat.id, trackerFromCloud(cat.id, events, targets, family.timezone)])));
+        const unmatchedEventIds = new Set(events.map((event) => event.id));
+        for (const [actionId, action] of pendingCareActions.current) {
+          const matchingEvent = events.find((event) => {
+            if (!unmatchedEventIds.has(event.id)) return false;
+            if (event.cat_id !== action.catId || event.actor_user_id !== cloudSession.user.id) return false;
+            if (event.metric !== databaseMetrics[action.metric] || Math.abs(Number(event.amount_delta) - action.amountDelta) > 0.000001) return false;
+            return action.eventId ? event.id === action.eventId : Math.abs(new Date(event.occurred_at).getTime() - new Date(action.timestamp).getTime()) <= 5;
+          });
+          if (matchingEvent) {
+            unmatchedEventIds.delete(matchingEvent.id);
+            pendingCareActions.current.delete(actionId);
+          }
+        }
+        const pendingByCat = new Map<string, PendingCareAction[]>();
+        for (const action of pendingCareActions.current.values()) {
+          pendingByCat.set(action.catId, [...(pendingByCat.get(action.catId) ?? []), action]);
+        }
+        setTrackers(Object.fromEntries(remoteCats.map((cat) => {
+          const baseTracker = trackerFromCloud(cat.id, events, targets, family.timezone);
+          const trackerWithPending = (pendingByCat.get(cat.id) ?? []).reduce(
+            (current, action) => applyCareAction(current, action.metric, action.amountDelta),
+            baseTracker,
+          );
+          return [cat.id, trackerWithPending];
+        })));
         setSelectedId((selected) => visibleCats.some((cat) => cat.id === selected) ? selected : visibleCats[0].id);
       } catch (cause) {
         if (active) setCloudError(cause instanceof Error ? cause.message : "Could not load shared family data.");
@@ -847,6 +902,14 @@ export default function App() {
     const timestamp = new Date().toISOString();
     if (cloudFamily && selectedCat && typeof selectedCat.id === "string") {
       const inferredDelta = amountDelta ?? (detail === "Marked done" ? 1 : detail === "Undid this check-in" ? -1 : 1);
+      const pendingAction: PendingCareAction = {
+        id: crypto.randomUUID(),
+        catId: selectedCat.id,
+        metric: key,
+        amountDelta: inferredDelta,
+        timestamp,
+      };
+      pendingCareActions.current.set(pendingAction.id, pendingAction);
       void recordCareEvent({
         family_id: cloudFamily.id,
         cat_id: selectedCat.id,
@@ -856,6 +919,8 @@ export default function App() {
         detail,
         occurred_at: timestamp,
       }).then((event) => {
+        const savedAction = pendingCareActions.current.get(pendingAction.id);
+        if (savedAction) savedAction.eventId = event.id;
         const entry: CareLog = {
           id: event.id,
           catId: event.cat_id,
@@ -869,6 +934,11 @@ export default function App() {
         setCloudEvents((current) => [event, ...current].slice(0, 500));
         setCareLogs((current) => [entry, ...current].slice(0, 500));
       }).catch((cause: unknown) => {
+        pendingCareActions.current.delete(pendingAction.id);
+        setTrackers((current) => {
+          const latest = { ...emptyTracker, ...(current[pendingAction.catId] ?? {}) };
+          return { ...current, [pendingAction.catId]: applyCareAction(latest, pendingAction.metric, -pendingAction.amountDelta) };
+        });
         setCloudError(cause instanceof Error ? cause.message : "Could not save that care entry.");
         setCloudRefreshTick((tick) => tick + 1);
       });
@@ -1257,43 +1327,8 @@ export default function App() {
           </div>
           {cloudError && <p className="cloud-feedback" role="status">{cloudError}</p>}
 
-          <div className="mobile-section-title">
-            <div><span>1</span><h2>What are we tracking?</h2></div>
-            <div className="section-one-actions">
-              <button onClick={openGoalEditor}><Icon name="settings" size={14} /> Edit goals</button>
-            </div>
-          </div>
-          <div className="mobile-item-grid">
-            {mobileMetrics.map((item) => {
-              const value = tracker[item.key];
-              const done = typeof value === "boolean" ? value : value > 0;
-              return (
-                <button
-                  className={`${item.color} ${activeMetric === item.key ? "active" : ""}`}
-                  key={item.key}
-                  onClick={() => {
-                    setActiveMetric(item.key);
-                    setUndoAction(null);
-                    setTapBurst(0);
-                    setShowBreakdown(false);
-                  }}
-                >
-                  <span><Icon name={item.icon} size={21} /></span>
-                  <strong>{item.shortLabel}</strong>
-                  {item.goal && (
-                    <>
-                      <small className="tile-goal-count">{Number(value)} / {Number(tracker[item.goal])}</small>
-                      <GoalProgress className="tile-goal-progress" value={Number(value)} goal={Number(tracker[item.goal])} />
-                    </>
-                  )}
-                  {done && <i><Icon name="check" size={10} /></i>}
-                </button>
-              );
-            })}
-          </div>
-
           <div className="mobile-section-title action-title">
-            <div><span>2</span><h2>Now tap to track</h2></div>
+            <div><h2>Quick update</h2></div>
           </div>
 
           <div className={`big-tap-wrap ${activeItem.color} ${showBreakdown ? "is-flipped" : ""}`}>
@@ -1422,6 +1457,41 @@ export default function App() {
                 ? "This check-in resets each week"
                 : "Tap the big card whenever it happens"}
           </p>
+          <div className="mobile-section-title">
+            <div><h2>Change what you’re tracking</h2></div>
+            <div className="section-one-actions">
+              <button onClick={openGoalEditor}><Icon name="settings" size={14} /> Edit goals</button>
+            </div>
+          </div>
+          <div className="mobile-item-grid">
+            {mobileMetrics.map((item) => {
+              const value = tracker[item.key];
+              const done = typeof value === "boolean" ? value : value > 0;
+              return (
+                <button
+                  className={`${item.color} ${activeMetric === item.key ? "active" : ""}`}
+                  key={item.key}
+                  onClick={() => {
+                    setActiveMetric(item.key);
+                    setUndoAction(null);
+                    setTapBurst(0);
+                    setShowBreakdown(false);
+                  }}
+                >
+                  <span><Icon name={item.icon} size={21} /></span>
+                  <strong>{item.shortLabel}</strong>
+                  {item.goal && (
+                    <>
+                      <small className="tile-goal-count">{Number(value)} / {Number(tracker[item.goal])}</small>
+                      <GoalProgress className="tile-goal-progress" value={Number(value)} goal={Number(tracker[item.goal])} />
+                    </>
+                  )}
+                  {done && <i><Icon name="check" size={10} /></i>}
+                </button>
+              );
+            })}
+          </div>
+
           <CareLogPanel cat={selectedCat} logs={careLogs} memberName={memberName} onMemberNameChange={setMemberName} timezone={cloudFamily?.timezone} cloudMode={Boolean(cloudFamily)} expanded={careLogExpanded} onToggle={() => setCareLogExpanded((open) => !open)} />
         </section>
 
