@@ -41,12 +41,15 @@ type IconName =
   | "moon"
   | "paw"
   | "play"
+  | "poop"
+  | "pee"
   | "plus"
   | "settings"
   | "sparkle"
   | "sun"
   | "treat"
-  | "undo";
+  | "undo"
+  | "yarn";
 
 type Cat = {
   id: number | string;
@@ -93,6 +96,8 @@ type CareLog = {
   what: string;
   detail: string;
   timestamp: string;
+  amountDelta?: number;
+  batchCount?: number;
 };
 
 type PendingCareAction = {
@@ -137,10 +142,10 @@ const metricIcons: Record<TrackableKey, IconName> = {
   cans: "medical",
   teethPawing: "paw",
   fountain: "drop",
-  pooped: "sparkle",
-  peed: "drop",
+  pooped: "poop",
+  peed: "pee",
   ears: "ear",
-  played: "play",
+  played: "yarn",
 };
 
 const databaseMetrics: Record<TrackableKey, string> = {
@@ -220,6 +225,58 @@ function conciseLogAction(detail: string) {
   const completed = detail.match(/^Completed (.+)$/);
   if (completed) return `+${completed[1]}`;
   return detail;
+}
+
+function getCareLogDelta(entry: CareLog) {
+  if (entry.amountDelta !== undefined) return entry.amountDelta;
+  const match = entry.detail.match(/^(Added|Removed) (\d+(?:\.\d+)?)(%)?/);
+  if (!match) return undefined;
+  const metric = getLogMetric(entry);
+  const amount = Number(match[2]) / (metric === "cans" && match[3] === "%" ? 100 : 1);
+  return match[1] === "Removed" ? -amount : amount;
+}
+
+function batchCareLogs(logs: CareLog[]) {
+  const sortedLogs = [...logs].sort((left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime());
+  const groups: CareLog[][] = [];
+  const batchableAction = (entry: CareLog) => getCareLogDelta(entry) !== undefined;
+
+  for (const entry of sortedLogs) {
+    const metric = getLogMetric(entry);
+    const action = entry.detail.startsWith("Removed") ? "Removed" : "Added";
+    const group = batchableAction(entry) && entry.amountDelta !== undefined
+      ? groups.find((candidate) => {
+        const first = candidate[0];
+        return batchableAction(first)
+          && getLogMetric(first) === metric
+          && (first.actorUserId ?? first.who) === (entry.actorUserId ?? entry.who)
+          && (first.detail.startsWith("Removed") ? "Removed" : "Added") === action
+          && new Date(first.timestamp).getTime() - new Date(entry.timestamp).getTime() <= 5 * 60 * 1000;
+      })
+      : undefined;
+
+    if (group) group.push(entry);
+    else groups.push([entry]);
+  }
+
+  return groups.map((group) => {
+    const first = group[0];
+    const firstDelta = getCareLogDelta(first);
+    if (group.length === 1 || firstDelta === undefined) return first;
+
+    const metric = getLogMetric(first);
+    const action = first.detail.startsWith("Removed") ? "Removed" : "Added";
+    const totalDelta = group.reduce((total, entry) => total + (getCareLogDelta(entry) ?? 0), 0);
+    const amount = Math.abs(totalDelta);
+    const formattedAmount = Number(amount.toFixed(1));
+    const detail = metric === "cans"
+      ? `${action} ${Math.round(formattedAmount * 100)}% of a can`
+      : `${action} ${formattedAmount} ${formattedAmount === 1
+        ? ({ treats: "treat", kibble: "spoon", teethPawing: "time", played: "session" } as Partial<Record<TrackableKey, string>>)[metric] ?? metricUnits[metric] ?? "times"
+        : metricUnits[metric] ?? "times"}`;
+
+    return { ...first, detail, amountDelta: totalDelta, batchCount: group.length };
+  });
 }
 
 const metricUnits: Partial<Record<TrackableKey, string>> = {
@@ -324,6 +381,18 @@ function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
     ),
     minus: <path d="M6 12h12" />,
     moon: <path d="M20.2 15.1A8.5 8.5 0 0 1 8.9 3.8 8.5 8.5 0 1 0 20.2 15.1Z" />,
+    poop: (
+      <>
+        <path d="M5 18.2c0-1.7 1.2-3 3-3.2-.7-2.1.4-4.3 2.6-4.8.3-2.4 1.5-4 3.4-4s3.1 1.6 3.4 4c2.1.5 3.2 2.7 2.5 4.8 1.8.2 3 1.5 3 3.2 0 1-.8 1.8-1.8 1.8H6.8c-1 0-1.8-.8-1.8-1.8Z" />
+        <path d="M9.4 17.2h.1m5 0h.1m-3.6 1.2c.7.6 1.4.6 2.1 0" />
+      </>
+    ),
+    pee: (
+      <>
+        <path d="M12 2.5s3.3 3.8 3.3 6.2a3.3 3.3 0 0 1-6.6 0c0-2.4 3.3-6.2 3.3-6.2Z" />
+        <path d="M5.3 12.8s2.3 2.7 2.3 4.4a2.3 2.3 0 0 1-4.6 0c0-1.7 2.3-4.4 2.3-4.4ZM18.7 12.8s2.3 2.7 2.3 4.4a2.3 2.3 0 0 1-4.6 0c0-1.7 2.3-4.4 2.3-4.4Z" />
+      </>
+    ),
     paw: (
       <>
         <ellipse cx="12" cy="15.5" rx="5.3" ry="4.2" />
@@ -361,6 +430,12 @@ function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
       </>
     ),
     undo: <path d="M9 14 4 9l5-5M4 9h9a7 7 0 0 1 0 14h-2" />,
+    yarn: (
+      <>
+        <circle cx="10.5" cy="12.5" r="6.5" />
+        <path d="M5 9.2c2.1 1.5 5.8 1.7 10.8-.1M4.1 12.3c3.7-1.9 8.7-1.8 12.7.2M4.7 15.1c3.4-1.9 7.4-1.7 10.5.1M8.6 6.4c-.3 4.1 1.1 7.5 4.6 11.4M15.7 17.5c2.3-.2 3.7.2 4.4 1.3.7 1-.3 2.5-1.5 2" />
+      </>
+    ),
   };
 
   return (
@@ -462,6 +537,7 @@ function CareLogPanel({
     const timestamp = new Date(entry.timestamp);
     return timestamp >= start && timestamp < end;
   });
+  const visibleLogs = batchCareLogs(periodLogs);
   const periodLabel = period === "today"
     ? "Today"
     : period === "day"
@@ -494,12 +570,13 @@ function CareLogPanel({
             <strong>Care log</strong>
           </span>
           <span className="activity-log-summary">
-            <span className="activity-log-count">{periodLogs.length} {periodLogs.length === 1 ? "entry" : "entries"}</span>
+            <span className="activity-log-count">{visibleLogs.length} {visibleLogs.length === 1 ? "activity" : "activities"}</span>
             <span className="activity-log-chevron" aria-hidden="true">⌄</span>
           </span>
         </span>
       </button>
-      {expanded && <div className="activity-log-content">
+      <div aria-hidden={!expanded} className={`activity-log-content-shell ${expanded ? "is-open" : ""}`} inert={!expanded}>
+      <div className="activity-log-content">
       {!cloudMode && <>
         <label className="member-name-field">
           Your name on this device
@@ -522,9 +599,9 @@ function CareLogPanel({
         )}
         <strong className="log-period-label">{periodLabel}</strong>
       </div>
-      {periodLogs.length ? (
+      {visibleLogs.length ? (
         <ol className="activity-log-list">
-          {periodLogs.map((entry) => (
+          {visibleLogs.map((entry) => (
             <li key={entry.id}>
               <span className={`activity-log-dot metric-${getLogMetric(entry)}`}><Icon name={metricIcons[getLogMetric(entry)]} size={13} /></span>
               <div><strong>{tileLabels[getLogMetric(entry)]}</strong><small>{conciseLogAction(entry.detail)} · by {entry.who}</small></div>
@@ -535,7 +612,8 @@ function CareLogPanel({
       ) : (
         <p className="activity-log-empty">No care entries {period === "today" ? "for today" : `for this ${period}`}. Choose another date or track a care action to start the log.</p>
       )}
-      </div>}
+      </div>
+      </div>
     </section>
   );
 }
@@ -584,7 +662,7 @@ function Toggle({
 }: {
   active: boolean;
   onClick: () => void;
-  label: string;
+  label: React.ReactNode;
 }) {
   return (
     <button
@@ -825,7 +903,7 @@ export default function App() {
         const appLogs = latestEvents.flatMap((event) => {
           const metric = appMetrics[event.metric];
           if (!metric) return [];
-          return [{
+        return [{
             id: event.id,
             catId: event.cat_id,
             metric,
@@ -834,6 +912,7 @@ export default function App() {
             what: metricLabels[metric],
             detail: event.detail,
             timestamp: event.occurred_at,
+            amountDelta: Number(event.amount_delta),
           } satisfies CareLog];
         });
         setCloudFamily(family);
@@ -930,6 +1009,7 @@ export default function App() {
           what: metricLabels[key],
           detail: event.detail,
           timestamp: event.occurred_at,
+          amountDelta: Number(event.amount_delta),
         };
         setCloudEvents((current) => [event, ...current].slice(0, 500));
         setCareLogs((current) => [entry, ...current].slice(0, 500));
@@ -953,6 +1033,7 @@ export default function App() {
         what: metricLabels[key],
         detail,
         timestamp,
+        amountDelta: amountDelta ?? (detail === "Marked done" ? 1 : detail === "Undid this check-in" ? -1 : undefined),
       },
       ...current,
     ].slice(0, 500));
@@ -1138,10 +1219,10 @@ export default function App() {
     { key: "cans", label: "Cans of wet food", shortLabel: "Wet food", icon: "medical", color: "mint", goal: "cansGoal", unit: "cans" },
     { key: "fountain", label: "Fountain top-up", shortLabel: "Water", icon: "drop", color: "aqua" },
     { key: "teethPawing", label: "Pawing at teeth", shortLabel: "Teeth", icon: "paw", color: "berry", unit: "times" },
-    { key: "pooped", label: "Pooped today", shortLabel: "Poop", icon: "sparkle", color: "lilac" },
-    { key: "peed", label: "Peed today", shortLabel: "Pee", icon: "drop", color: "blueberry" },
+    { key: "pooped", label: "Pooped today", shortLabel: "Poop", icon: "poop", color: "lilac" },
+    { key: "peed", label: "Peed today", shortLabel: "Pee", icon: "pee", color: "blueberry" },
     { key: "ears", label: "Ears cleaned", shortLabel: "Ears", icon: "ear", color: "peachy" },
-    { key: "played", label: "Playtime", shortLabel: "Play", icon: "play", color: "purple", unit: "session" },
+    { key: "played", label: "Playtime", shortLabel: "Play", icon: "yarn", color: "purple", unit: "session" },
   ];
   const activeItem = mobileMetrics.find((item) => item.key === activeMetric)!;
   const activeValue = tracker[activeMetric] as number | boolean;
@@ -1169,6 +1250,7 @@ export default function App() {
       || entry.detail === "Marked done";
     return String(entry.catId) === String(selectedId) && (entry.metric ? entry.metric === activeMetric : entry.what === metricLabels[activeMetric]) && isInPeriod && isPositiveAction;
   });
+  const visibleActivityEntries = batchCareLogs(activityEntries);
   const contributionTimeFormat = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
   const contributionPeriod = activeMetric === "ears" ? "This week" : "Today";
 
@@ -1401,7 +1483,10 @@ export default function App() {
                     <i className="string" /><b className="toy" /><span className="swipe-paw"><i /><i /><i /></span>
                   </div>
                 )}
-                {(activeMetric === "peed" || activeMetric === "fountain") && (
+                {activeMetric === "peed" && (
+                  <div className="pee-scene"><Icon name="pee" size={58} /></div>
+                )}
+                {activeMetric === "fountain" && (
                   <div className="droplet-scene"><i /><i /><i /><i /><i /></div>
                 )}
                 {activeMetric === "pooped" && (
@@ -1432,9 +1517,9 @@ export default function App() {
               <span aria-label={`${breakdownAmountLabel} tracked`}>{breakdownAmountLabel}</span>
             </div>
             <h3>{activeItem.shortLabel}</h3>
-            {activityEntries.length ? (
+            {visibleActivityEntries.length ? (
               <ol className="record-card-list">
-                {activityEntries.map((entry) => (
+                {visibleActivityEntries.map((entry) => (
                   <li key={entry.id}>
                     <div><strong>{entry.who}</strong><small>{entry.detail}</small></div>
                     <time dateTime={entry.timestamp}>{contributionTimeFormat.format(new Date(entry.timestamp))}</time>
@@ -1574,8 +1659,8 @@ export default function App() {
                 <span className="item-icon lavender"><Icon name="sparkle" size={19} /></span>
                 <div className="tracker-label"><strong>Bathroom check</strong><small>today</small></div>
                 <div className="split-toggles">
-                  <Toggle active={tracker.pooped} onClick={() => update("pooped", !tracker.pooped)} label="Pooped" />
-                  <Toggle active={tracker.peed} onClick={() => update("peed", !tracker.peed)} label="Peed" />
+                  <Toggle active={tracker.pooped} onClick={() => update("pooped", !tracker.pooped)} label={<><Icon name="poop" size={14} /> Pooped</>} />
+                  <Toggle active={tracker.peed} onClick={() => update("peed", !tracker.peed)} label={<><Icon name="pee" size={14} /> Peed</>} />
                 </div>
               </div>
               <div className="tracker-row weekly-row">
@@ -1589,7 +1674,7 @@ export default function App() {
 
           <article className={`play-card ${tracker.played > 0 ? "played" : ""}`}>
             <div className="play-copy">
-              <span className="heading-icon violet"><Icon name="play" /></span>
+              <span className="heading-icon violet"><Icon name="yarn" /></span>
               <div>
                 <span className="frequency">Daily</span>
                 <h2>Playtime</h2>
@@ -1597,7 +1682,7 @@ export default function App() {
               </div>
             </div>
             <button onClick={() => update("played", tracker.played + 1)}>
-              <Icon name="play" size={18} />
+              <Icon name="yarn" size={18} />
               Add session
             </button>
             <div className="yarn" aria-hidden="true"><span /><i /></div>

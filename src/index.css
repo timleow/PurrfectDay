@@ -54,6 +54,17 @@ a:focus-visible {
 
 .app-shell.family-route-hidden { display: none; }
 
+.app-shell:not(.family-route-hidden) > main,
+.cats-page,
+.family-portal-page {
+  animation: route-enter 200ms ease-out both;
+}
+
+@keyframes route-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 .sidebar {
   position: fixed;
   inset: 0 auto 0 0;
@@ -495,6 +506,23 @@ main {
 
 .activity-log-content {
   margin-top: 16px;
+}
+
+.activity-log-content-shell {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 240ms cubic-bezier(.22, 1, .36, 1), opacity 180ms ease-out;
+}
+
+.activity-log-content-shell.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.activity-log-content-shell > .activity-log-content {
+  min-height: 0;
+  overflow: hidden;
 }
 
 .member-name-field {
@@ -2491,7 +2519,8 @@ h1 {
   }
 
   .paw-scene,
-  .ear-scene {
+  .ear-scene,
+  .pee-scene {
     position: absolute;
     top: 30px;
     left: 50%;
