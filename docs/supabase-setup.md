@@ -15,7 +15,7 @@ The publishable key is intended for client apps. Never put a service-role/secret
 
 ## 2. Apply the database migration
 
-Apply all files in `supabase/migrations/` to the project using the Supabase CLI (`supabase link` followed by `supabase db push`) or paste the migrations into the Supabase SQL Editor in timestamp order. The migrations create profiles, families, direct-by-email family members, cats, target rules, care events, account linking, RLS policies, the private cat-photo bucket, and the family-member removal function used by the workspace. The Google profile-photo migration adds each signed-in member's avatar URL to their profile so it can be shown to other family members.
+Apply all files in `supabase/migrations/` to the project using the Supabase CLI (`supabase link` followed by `supabase db push`) or paste the migrations into the Supabase SQL Editor in timestamp order. The migrations create profiles, families, direct-by-email family members, cats, target rules, care events, account linking, RLS policies, the private cat-photo bucket, and family management functions used by the workspace. The Google profile-photo migration adds each signed-in member's avatar URL to their profile so it can be shown to other family members. The family-member-names migration fills names from Google account metadata and lets family members edit display names. The family-deletion migration adds the permission-checked function used to delete a family and its related database records.
 
 For a local Supabase stack, install the Supabase CLI and run `supabase start` followed by `supabase db reset` from the repository root.
 

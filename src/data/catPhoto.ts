@@ -75,12 +75,12 @@ export function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-export function cropCatPhoto(dataUrl: string, position: { x: number; y: number }): Promise<string> {
+export function cropCatPhoto(dataUrl: string, position: { x: number; y: number; zoom?: number }): Promise<string> {
   return new Promise((resolve, reject) => {
     const image = new Image();
     image.onerror = () => reject(new Error("Could not prepare the cat photo crop."));
     image.onload = () => {
-      const side = Math.min(image.naturalWidth, image.naturalHeight);
+      const side = Math.min(image.naturalWidth, image.naturalHeight) / Math.min(3, Math.max(1, position.zoom ?? 1));
       const maxX = image.naturalWidth - side;
       const maxY = image.naturalHeight - side;
       const sourceX = maxX * Math.min(100, Math.max(0, position.x)) / 100;

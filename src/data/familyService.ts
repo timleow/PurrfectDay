@@ -33,6 +33,40 @@ export async function updateFamily(familyId: string, changes: Pick<Family, "name
   if (error) throw error;
 }
 
+async function listStorageEntries(path: string) {
+  const bucket = getClient().storage.from("cat-photos");
+  const entries: Array<{ name: string }> = [];
+  const pageSize = 100;
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await bucket.list(path, { limit: pageSize, offset });
+    if (error) throw error;
+    const page = data ?? [];
+    entries.push(...page);
+    if (page.length < pageSize) return entries;
+  }
+}
+
+export async function deleteFamily(familyId: string) {
+  const client = getClient();
+  const { error: accessError } = await client.rpc("assert_family_delete_allowed", { p_family_id: familyId });
+  if (accessError) throw accessError;
+
+  const bucket = client.storage.from("cat-photos");
+  const catFolders = await listStorageEntries(familyId);
+  const photoPaths = (await Promise.all(catFolders.map(async (folder) => {
+    const files = await listStorageEntries(`${familyId}/${folder.name}`);
+    return files.map((file) => `${familyId}/${folder.name}/${file.name}`);
+  }))).flat();
+
+  for (let index = 0; index < photoPaths.length; index += 100) {
+    const { error } = await bucket.remove(photoPaths.slice(index, index + 100));
+    if (error) throw new Error(`Could not remove the family’s cat photos, so the family was not deleted: ${error.message}`);
+  }
+
+  const { error } = await client.rpc("delete_family", { p_family_id: familyId });
+  if (error) throw error;
+}
+
 export async function listFamilyMembers(familyId: string): Promise<FamilyMember[]> {
   const { data, error } = await getClient()
     .from("family_members")
@@ -66,6 +100,14 @@ export async function addFamilyMember(familyId: string, email: string, displayNa
 
 export async function removeFamilyMember(memberId: string) {
   const { error } = await getClient().rpc("remove_family_member", { p_member_id: memberId });
+  if (error) throw error;
+}
+
+export async function updateFamilyMemberName(memberId: string, displayName: string) {
+  const { error } = await getClient().rpc("update_family_member_display_name", {
+    p_member_id: memberId,
+    p_display_name: displayName.trim(),
+  });
   if (error) throw error;
 }
 

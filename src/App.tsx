@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
 import FamilyPortal from "./components/FamilyPortal";
 import CatsOverview from "./components/CatsOverview";
+import ConfirmDialog from "./components/ConfirmDialog";
 import SignInScreen from "./components/SignInScreen";
 import { blobToDataUrl, compressCatPhoto, cropCatPhoto } from "./data/catPhoto";
 import { addDateKeyDays, dateKeyInZone, getFamilyCareWindow, startOfDayInZone } from "./data/dateWindows";
 import { debounce } from "./data/debounce";
+import { clearWorkspaceCache, readWorkspaceCache, writeWorkspaceCache } from "./data/workspaceCache";
 import { canUndoCareAction, undoNumericDelta, undoWetFoodDelta } from "./data/undoCareAction";
 import {
   addCat as addCloudCat,
@@ -38,6 +41,7 @@ type IconName =
   | "heart"
   | "medical"
   | "minus"
+  | "more"
   | "moon"
   | "paw"
   | "play"
@@ -198,6 +202,26 @@ function trackerFromCloud(catId: string, events: CareEvent[], targets: TargetRul
   };
 }
 
+function careLogsFromCloud(events: CareEvent[], members: FamilyMember[], userId: string, fallbackName: string, timezone: string): CareLog[] {
+  const endOfToday = new Date(getFamilyCareWindow(timezone).tomorrowFrom);
+  const actorNames = new Map(members.map((member) => [member.user_id, member.display_name || member.email.split("@")[0]]));
+  return events.filter((event) => new Date(event.occurred_at) < endOfToday).flatMap((event) => {
+    const metric = appMetrics[event.metric];
+    if (!metric) return [];
+    return [{
+      id: event.id,
+      catId: event.cat_id,
+      metric,
+      actorUserId: event.actor_user_id,
+      who: actorNames.get(event.actor_user_id) ?? (event.actor_user_id === userId ? fallbackName : "Family member"),
+      what: metricLabels[metric],
+      detail: event.detail,
+      timestamp: event.occurred_at,
+      amountDelta: Number(event.amount_delta),
+    } satisfies CareLog];
+  });
+}
+
 function applyCareAction(tracker: Tracker, metric: TrackableKey, amountDelta: number): Tracker {
   if (metric === "cans") {
     const amount = Math.max(0, tracker.cans + tracker.canProgress / 100 + amountDelta);
@@ -237,7 +261,7 @@ function getCareLogDelta(entry: CareLog) {
 }
 
 function batchCareLogs(logs: CareLog[]) {
-  const sortedLogs = [...logs].sort((left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime());
+  const sortedLogs = [...logs].sort((left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime());
   const groups: CareLog[][] = [];
   const batchableAction = (entry: CareLog) => getCareLogDelta(entry) !== undefined;
 
@@ -251,7 +275,7 @@ function batchCareLogs(logs: CareLog[]) {
           && getLogMetric(first) === metric
           && (first.actorUserId ?? first.who) === (entry.actorUserId ?? entry.who)
           && (first.detail.startsWith("Removed") ? "Removed" : "Added") === action
-          && new Date(first.timestamp).getTime() - new Date(entry.timestamp).getTime() <= 5 * 60 * 1000;
+          && new Date(entry.timestamp).getTime() - new Date(first.timestamp).getTime() <= 5 * 60 * 1000;
       })
       : undefined;
 
@@ -276,6 +300,41 @@ function batchCareLogs(logs: CareLog[]) {
         : metricUnits[metric] ?? "times"}`;
 
     return { ...first, detail, amountDelta: totalDelta, batchCount: group.length };
+  }).sort((left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime());
+}
+
+function removeUndoneCareLogs(logs: CareLog[]) {
+  const ordered = [...logs].sort((left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime());
+  const remaining: Array<{ entry: CareLog; delta: number }> = [];
+  for (const entry of ordered) {
+    const delta = getCareLogDelta(entry);
+    if (delta === undefined || delta >= 0) {
+      remaining.push({ entry, delta: delta ?? 0 });
+      continue;
+    }
+    let toUndo = Math.abs(delta);
+    const actor = entry.actorUserId ?? entry.who;
+    for (const candidate of remaining) {
+      if (toUndo <= 0.000001) break;
+      if (candidate.delta <= 0 || getLogMetric(candidate.entry) !== getLogMetric(entry)) continue;
+      if ((candidate.entry.actorUserId ?? candidate.entry.who) !== actor) continue;
+      const canceled = Math.min(candidate.delta, toUndo);
+      candidate.delta -= canceled;
+      toUndo -= canceled;
+    }
+    if (toUndo > 0.000001) remaining.push({ entry, delta: -toUndo });
+  }
+  return remaining.flatMap(({ entry, delta }) => {
+    if (delta >= -0.000001 && delta <= 0.000001) return [];
+    if (delta > 0 && getCareLogDelta(entry) !== undefined && Math.abs(delta - (getCareLogDelta(entry) ?? 0)) > 0.000001) {
+      const amount = getLogMetric(entry) === "cans" ? `${Math.round(delta * 100)}% of a can` : `${Number(delta.toFixed(1))} ${metricUnits[getLogMetric(entry)] ?? "times"}`;
+      return [{ ...entry, amountDelta: delta, detail: `Added ${amount}` }];
+    }
+    if (delta < 0 && getCareLogDelta(entry) !== undefined && Math.abs(delta - (getCareLogDelta(entry) ?? 0)) > 0.000001) {
+      const amount = getLogMetric(entry) === "cans" ? `${Math.round(Math.abs(delta) * 100)}% of a can` : `${Number(Math.abs(delta).toFixed(1))} ${metricUnits[getLogMetric(entry)] ?? "times"}`;
+      return [{ ...entry, amountDelta: delta, detail: `Removed ${amount}` }];
+    }
+    return [entry];
   });
 }
 
@@ -338,11 +397,6 @@ function loadTrackers(saved: string | null): Record<string, Tracker> {
   );
 }
 
-const starterCats: Cat[] = [
-  { id: 1, name: "Mochi", color: "#F2A07B", initial: "M" },
-  { id: 2, name: "Bean", color: "#91A8D4", initial: "B" },
-];
-
 function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, React.ReactNode> = {
     bowl: (
@@ -380,6 +434,11 @@ function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
       </>
     ),
     minus: <path d="M6 12h12" />,
+    more: <>
+      <circle cx="12" cy="5" r="1.6" />
+      <circle cx="12" cy="12" r="1.6" />
+      <circle cx="12" cy="19" r="1.6" />
+    </>,
     moon: <path d="M20.2 15.1A8.5 8.5 0 0 1 8.9 3.8 8.5 8.5 0 1 0 20.2 15.1Z" />,
     poop: (
       <>
@@ -485,6 +544,89 @@ function readCatPhoto(file: File): Promise<string> {
   return compressCatPhoto(file).then(blobToDataUrl);
 }
 
+type PhotoPosition = { x: number; y: number };
+
+function CatPhotoCropEditor({
+  photo,
+  position,
+  onPositionChange,
+  zoom,
+  onZoomChange,
+}: {
+  photo: string;
+  position: PhotoPosition;
+  onPositionChange: (position: PhotoPosition) => void;
+  zoom: number;
+  onZoomChange: (zoom: number) => void;
+}) {
+  const [previewPosition, setPreviewPosition] = useState(position);
+  const [previewZoom, setPreviewZoom] = useState(zoom);
+  const positionRef = useRef(position);
+  const zoomRef = useRef(zoom);
+  const drag = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number; width: number; height: number; current: PhotoPosition } | null>(null);
+  const clamp = (value: number) => Math.min(100, Math.max(0, value));
+  const updatePosition = (next: PhotoPosition) => {
+    positionRef.current = next;
+    setPreviewPosition(next);
+  };
+  const updateZoom = (next: number) => {
+    zoomRef.current = next;
+    setPreviewZoom(next);
+  };
+  const commitPosition = () => onPositionChange(positionRef.current);
+  const commitZoom = () => onZoomChange(zoomRef.current);
+
+  useEffect(() => {
+    positionRef.current = position;
+    zoomRef.current = zoom;
+    setPreviewPosition(position);
+    setPreviewZoom(zoom);
+  }, [position.x, position.y, zoom]);
+
+  return <div className="cat-photo-crop-section">
+    <div
+      aria-label="Cat photo circular crop preview. Drag the photo to adjust the crop."
+      className="cat-photo-crop-preview"
+      onPointerDown={(event) => {
+        event.currentTarget.setPointerCapture(event.pointerId);
+        const bounds = event.currentTarget.getBoundingClientRect();
+        drag.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: positionRef.current.x, originY: positionRef.current.y, width: bounds.width, height: bounds.height, current: positionRef.current };
+      }}
+      onPointerMove={(event) => {
+        const currentDrag = drag.current;
+        if (!currentDrag || currentDrag.pointerId !== event.pointerId) return;
+        currentDrag.current = {
+          x: clamp(currentDrag.originX - ((event.clientX - currentDrag.startX) / currentDrag.width) * 100),
+          y: clamp(currentDrag.originY - ((event.clientY - currentDrag.startY) / currentDrag.height) * 100),
+        };
+        updatePosition(currentDrag.current);
+      }}
+      onPointerUp={() => { if (drag.current) updatePosition(drag.current.current); drag.current = null; commitPosition(); }}
+      onPointerCancel={() => { if (drag.current) updatePosition(drag.current.current); drag.current = null; commitPosition(); }}
+      role="group"
+      style={{ touchAction: "none" }}
+    >
+      <img alt="" draggable={false} src={photo} style={{ objectPosition: `${previewPosition.x}% ${previewPosition.y}%`, transform: `translateZ(0) scale(${previewZoom})`, transformOrigin: `${previewPosition.x}% ${previewPosition.y}%`, willChange: "object-position, transform" }} />
+      <span aria-hidden="true" className="cat-photo-crop-frame" />
+    </div>
+    <p>Drag the photo to choose what appears in the circle.</p>
+    <div className="cat-photo-crop-controls">
+      <label className="cat-photo-zoom-control">
+        Zoom · {zoom.toFixed(1)}×
+        <input aria-label="Zoom photo" max="3" min="1" onBlur={commitZoom} onChange={(event) => { const next = Number(event.target.value); updateZoom(next); onZoomChange(next); }} onKeyUp={commitZoom} onPointerUp={commitZoom} step="0.1" type="range" value={previewZoom} />
+      </label>
+      <label>
+        Horizontal crop
+        <input aria-label="Horizontal photo crop" max="100" min="0" onBlur={commitPosition} onChange={(event) => { const next = { ...positionRef.current, x: Number(event.target.value) }; updatePosition(next); onPositionChange(next); }} onKeyUp={commitPosition} onPointerUp={commitPosition} type="range" value={previewPosition.x} />
+      </label>
+      <label>
+        Vertical crop
+        <input aria-label="Vertical photo crop" max="100" min="0" onBlur={commitPosition} onChange={(event) => { const next = { ...positionRef.current, y: Number(event.target.value) }; updatePosition(next); onPositionChange(next); }} onKeyUp={commitPosition} onPointerUp={commitPosition} type="range" value={previewPosition.y} />
+      </label>
+    </div>
+  </div>;
+}
+
 function errorMessage(cause: unknown, fallback: string) {
   if (cause instanceof Error && cause.message) return cause.message;
   if (cause && typeof cause === "object" && "message" in cause && typeof cause.message === "string") return cause.message;
@@ -501,6 +643,16 @@ function toLocalDateInput(date: Date) {
 function fromLocalDateInput(value: string) {
   const [year, month, day] = value.split("-").map(Number);
   return new Date(year, month - 1, day);
+}
+
+function withWorkspaceTimeout<T>(request: Promise<T>): Promise<T> {
+  let timeout: number | undefined;
+  return Promise.race([
+    request,
+    new Promise<T>((_, reject) => {
+      timeout = window.setTimeout(() => reject(new Error("Family data is taking too long to load. Check your connection and try again.")), 15000);
+    }),
+  ]).finally(() => { if (timeout !== undefined) window.clearTimeout(timeout); });
 }
 
 function CareLogPanel({
@@ -537,9 +689,9 @@ function CareLogPanel({
     const timestamp = new Date(entry.timestamp);
     return timestamp >= start && timestamp < end;
   });
-  const visibleLogs = batchCareLogs(periodLogs);
+  const visibleLogs = batchCareLogs(removeUndoneCareLogs(periodLogs));
   const periodLabel = period === "today"
-    ? "Today"
+    ? `Today · ${new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric", timeZone: activeTimezone }).format(start)}`
     : period === "day"
     ? new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric", timeZone: activeTimezone }).format(start)
     : `${new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", timeZone: activeTimezone }).format(start)} – ${new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric", timeZone: activeTimezone }).format(new Date(end.getTime() - 1))}`;
@@ -554,11 +706,13 @@ function CareLogPanel({
   });
 
   const movePeriod = (direction: -1 | 1) => {
-    setSelectedDate((current) => {
-      const next = new Date(current);
-      next.setDate(next.getDate() + direction * (period === "week" ? 7 : 1));
-      return next;
+    const currentKey = period === "today" ? selectedKey : toLocalDateInput(selectedDate);
+    const nextDate = fromLocalDateInput(currentKey);
+    nextDate.setDate(nextDate.getDate() + direction * (period === "week" ? 7 : 1));
+    setSelectedDate(() => {
+      return nextDate;
     });
+    if (period === "today") setPeriod("day");
   };
 
   return (
@@ -590,13 +744,11 @@ function CareLogPanel({
           <button aria-pressed={period === "day"} onClick={() => setPeriod("day")} type="button">By day</button>
           <button aria-pressed={period === "week"} onClick={() => setPeriod("week")} type="button">By week</button>
         </div>
-        {period !== "today" && (
-          <div className="log-date-nav">
-            <button aria-label={`Previous ${period}`} onClick={() => movePeriod(-1)} type="button">‹</button>
-            <input aria-label="Choose a date" onChange={(event) => event.target.value && setSelectedDate(fromLocalDateInput(event.target.value))} type="date" value={toLocalDateInput(selectedDate)} />
-            <button aria-label={`Next ${period}`} onClick={() => movePeriod(1)} type="button">›</button>
-          </div>
-        )}
+        <div className="log-date-nav">
+          <button aria-label={`Previous ${period === "today" ? "day" : period}`} onClick={() => movePeriod(-1)} type="button">‹</button>
+          <input aria-label="Choose a date" onChange={(event) => { if (!event.target.value) return; setSelectedDate(fromLocalDateInput(event.target.value)); setPeriod("day"); }} type="date" value={selectedKey} />
+          <button aria-label={`Next ${period === "today" ? "day" : period}`} onClick={() => movePeriod(1)} type="button">›</button>
+        </div>
         <strong className="log-period-label">{periodLabel}</strong>
       </div>
       {visibleLogs.length ? (
@@ -719,9 +871,9 @@ export default function App() {
   });
   const [cats, setCats] = useState<Cat[]>(() => {
     const saved = localStorage.getItem("purrfect-cats");
-    return saved ? JSON.parse(saved) : starterCats;
+    return saved ? JSON.parse(saved) : [];
   });
-  const [selectedId, setSelectedId] = useState<number | string>(cats[0]?.id ?? 1);
+  const [selectedId, setSelectedId] = useState<number | string>(cats[0]?.id ?? "");
   const [trackers, setTrackers] = useState<Record<string, Tracker>>(() => loadTrackers(localStorage.getItem("purrfect-trackers")));
   const [showAddCat, setShowAddCat] = useState(false);
   const [activeTab, setActiveTab] = useState<"care" | "cats" | "family">("care");
@@ -730,25 +882,36 @@ export default function App() {
   const [newCatName, setNewCatName] = useState("");
   const [newCatPhoto, setNewCatPhoto] = useState<string | undefined>();
   const [newCatPhotoPosition, setNewCatPhotoPosition] = useState({ x: 50, y: 50 });
-  const catPhotoCropDrag = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
+  const [newCatPhotoZoom, setNewCatPhotoZoom] = useState(1);
+  const [photoEditCatId, setPhotoEditCatId] = useState<number | string | null>(null);
+  const [photoEditDraft, setPhotoEditDraft] = useState<string | undefined>();
+  const [photoEditSaving, setPhotoEditSaving] = useState(false);
+  const [pendingCatRemoval, setPendingCatRemoval] = useState<Cat | null>(null);
+  const [catRemovalBusy, setCatRemovalBusy] = useState(false);
   const [photoError, setPhotoError] = useState("");
   const [memberName, setMemberName] = useState(() => localStorage.getItem("purrfect-member-name") ?? "");
   const [careLogs, setCareLogs] = useState<CareLog[]>(() => {
     const saved = localStorage.getItem("purrfect-care-logs");
     return saved ? JSON.parse(saved) : [];
   });
-  const [cloudSession, setCloudSession] = useState<{ user: { id: string; email?: string } } | null>(null);
+  const [cloudSession, setCloudSession] = useState<Session | null>(null);
   const [authLoading, setAuthLoading] = useState(isSupabaseConfigured);
   const [authBusy, setAuthBusy] = useState(false);
   const [cloudFamily, setCloudFamily] = useState<Family | null>(null);
   const [cloudMembers, setCloudMembers] = useState<FamilyMember[]>([]);
   const [cloudEvents, setCloudEvents] = useState<CareEvent[]>([]);
   const pendingCareActions = useRef(new Map<string, PendingCareAction>());
+  const cachedUserId = useRef<string | null>(null);
   const [cloudTargets, setCloudTargets] = useState<TargetRule[]>([]);
   const [cloudError, setCloudError] = useState("");
   const [cloudRefreshTick, setCloudRefreshTick] = useState(0);
+  const [cloudWorkspaceLoading, setCloudWorkspaceLoading] = useState(isSupabaseConfigured);
   const [careLogExpanded, setCareLogExpanded] = useState(false);
   const [showBreakdown, setShowBreakdown] = useState(false);
+  const [showTrackPicker, setShowTrackPicker] = useState(false);
+  const swipeStart = useRef<{ x: number; y: number } | null>(null);
+  const ignoreNextTap = useRef(false);
+  const [modeSwipeTransition, setModeSwipeTransition] = useState<{ direction: "next" | "previous"; key: number } | null>(null);
   const [activeMetric, setActiveMetric] = useState<TrackableKey>(() => {
     const savedMetric = localStorage.getItem("purrfect-active-metric");
     const trackableKeys: TrackableKey[] = ["treats", "kibble", "cans", "teethPawing", "fountain", "pooped", "peed", "ears", "played"];
@@ -778,9 +941,18 @@ export default function App() {
     localStorage.setItem("purrfect-active-metric", activeMetric);
   }, [activeMetric]);
 
+  useEffect(() => {
+    if (!showTrackPicker) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setShowTrackPicker(false);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [showTrackPicker]);
+
   const returnToCare = () => setActiveTab("care");
 
-  const selectedCat = cats.find((cat) => cat.id === selectedId) ?? cats[0] ?? starterCats[0];
+  const selectedCat = cats.find((cat) => cat.id === selectedId) ?? cats[0] ?? { id: "", name: "Your cat", color: "#79B8A9", initial: "?" };
   const savedTracker = { ...emptyTracker, ...(trackers[selectedId] ?? {}) };
   const tracker = {
     ...savedTracker,
@@ -844,16 +1016,20 @@ export default function App() {
   useEffect(() => {
     if (!isSupabaseConfigured || !cloudSession?.user.id) {
       pendingCareActions.current.clear();
+      cachedUserId.current = null;
       setCloudFamily(null);
       setCloudMembers([]);
       setCloudEvents([]);
       setCloudTargets([]);
       setCloudError("");
+      setCloudWorkspaceLoading(false);
       if (!cloudSession) {
-        const localCats = localStorage.getItem("purrfect-cats");
         const localLogs = localStorage.getItem("purrfect-care-logs");
-        setCats(localCats ? JSON.parse(localCats) as Cat[] : starterCats);
-        setSelectedId((localCats ? JSON.parse(localCats) as Cat[] : starterCats)[0]?.id ?? 1);
+        const savedCats = localStorage.getItem("purrfect-cats");
+        const localCats = savedCats ? JSON.parse(savedCats) as Cat[] : [];
+        setCats(localCats);
+        setSelectedId(localCats[0]?.id ?? "");
+        if (localCats.length === 0) setActiveTab("cats");
         setTrackers(loadTrackers(localStorage.getItem("purrfect-trackers")));
         setCareLogs(localLogs ? JSON.parse(localLogs) as CareLog[] : []);
       }
@@ -862,30 +1038,49 @@ export default function App() {
 
     let active = true;
     setCloudError("");
+    setCloudWorkspaceLoading(true);
+    const userId = cloudSession.user.id;
+    if (cachedUserId.current !== userId) {
+      cachedUserId.current = userId;
+      const cached = readWorkspaceCache(userId);
+      if (cached) {
+        const cachedCats: Cat[] = cached.cats.map((cat) => ({ id: cat.id, name: cat.name, color: cat.color, initial: cat.initial, photo: cat.photo }));
+        const fallbackName = cloudSession.user.email?.split("@")[0] ?? "Family member";
+        setCloudFamily(cached.family);
+        setCloudMembers(cached.members);
+        setCloudEvents(cached.events);
+        setCloudTargets(cached.targets);
+        setCats(cachedCats);
+        setCareLogs(careLogsFromCloud(cached.events, cached.members, userId, fallbackName, cached.family.timezone));
+        setTrackers(Object.fromEntries(cached.cats.map((cat) => [cat.id, trackerFromCloud(cat.id, cached.events, cached.targets, cached.family.timezone)])));
+        setSelectedId((selected) => cachedCats.some((cat) => cat.id === selected) ? selected : cachedCats[0]?.id ?? "");
+        if (!cachedCats.length) setActiveTab("cats");
+        setCloudWorkspaceLoading(false);
+      }
+    }
     void (async () => {
       try {
-        const family = await getMyFamily(cloudSession.user.id);
+        const family = await withWorkspaceTimeout(getMyFamily(cloudSession.user.id));
         if (!active) return;
         if (!family) {
+          clearWorkspaceCache(userId);
           setCloudFamily(null);
           setCloudMembers([]);
           setCloudEvents([]);
           setCloudTargets([]);
-          const savedCats = localStorage.getItem("purrfect-cats");
-          const localCats = savedCats ? JSON.parse(savedCats) as Cat[] : starterCats;
-          setCats(localCats);
-          setSelectedId((selected) => localCats.some((cat) => cat.id === selected) ? selected : localCats[0]?.id ?? 1);
-          setTrackers(loadTrackers(localStorage.getItem("purrfect-trackers")));
-          const savedLogs = localStorage.getItem("purrfect-care-logs");
-          setCareLogs(savedLogs ? JSON.parse(savedLogs) as CareLog[] : []);
+          setCats([]);
+          setSelectedId("");
+          setActiveTab("cats");
+          setTrackers({});
+          setCareLogs([]);
           return;
         }
-        const [remoteCats, members, targets, events] = await Promise.all([
+        const [remoteCats, members, targets, events] = await withWorkspaceTimeout(Promise.all([
           listCloudCats(family.id),
           listFamilyMembers(family.id),
           listTargets(family.id),
           listCareEvents(family.id, "1970-01-01T00:00:00.000Z", new Date(Date.now() + 86400000).toISOString()),
-        ]);
+        ]));
         if (!active) return;
         const catsWithPhotos = await Promise.all(remoteCats.map(async (cat) => ({
           ...cat,
@@ -898,32 +1093,24 @@ export default function App() {
           initial: cat.name[0]?.toUpperCase() ?? "?",
           photo: cat.photoUrl,
         }));
-        const currentWindow = getFamilyCareWindow(family.timezone);
-        const endOfToday = new Date(currentWindow.tomorrowFrom);
-        const latestEvents = events.filter((event) => new Date(event.occurred_at) < endOfToday);
         const actorNames = new Map(members.map((member) => [member.user_id, member.display_name || member.email.split("@")[0]]));
-        const appLogs = latestEvents.flatMap((event) => {
-          const metric = appMetrics[event.metric];
-          if (!metric) return [];
-        return [{
-            id: event.id,
-            catId: event.cat_id,
-            metric,
-            actorUserId: event.actor_user_id,
-            who: actorNames.get(event.actor_user_id) ?? (event.actor_user_id === cloudSession.user.id ? cloudSession.user.email?.split("@")[0] : undefined) ?? "Family member",
-            what: metricLabels[metric],
-            detail: event.detail,
-            timestamp: event.occurred_at,
-            amountDelta: Number(event.amount_delta),
-          } satisfies CareLog];
-        });
+        const appLogs = careLogsFromCloud(events, members, userId, cloudSession.user.email?.split("@")[0] ?? "Family member", family.timezone);
         setCloudFamily(family);
         setCloudMembers(members);
         setCloudEvents(events);
         setCloudTargets(targets);
-        const visibleCats = appCats.length ? appCats : [{ id: "family-needs-cat", name: "Add your first cat", color: "#79B8A9", initial: "+" }];
-        setCats(visibleCats);
-        if (!appCats.length) setShowAddCat(true);
+        setCats(appCats);
+        writeWorkspaceCache(userId, {
+          family,
+          cats: catsWithPhotos.map((cat) => ({ ...cat, initial: cat.name[0]?.toUpperCase() ?? "?", photo: cat.photoUrl })),
+          members,
+          targets,
+          events,
+        });
+        if (!appCats.length) {
+          setActiveTab("cats");
+          setShowAddCat(true);
+        }
         setCareLogs(appLogs);
         setMemberName(actorNames.get(cloudSession.user.id) ?? cloudSession.user.email?.split("@")[0] ?? "Family member");
         const unmatchedEventIds = new Set(events.map((event) => event.id));
@@ -951,13 +1138,45 @@ export default function App() {
           );
           return [cat.id, trackerWithPending];
         })));
-        setSelectedId((selected) => visibleCats.some((cat) => cat.id === selected) ? selected : visibleCats[0].id);
+        setSelectedId((selected) => appCats.some((cat) => cat.id === selected) ? selected : appCats[0]?.id ?? "");
       } catch (cause) {
         if (active) setCloudError(cause instanceof Error ? cause.message : "Could not load shared family data.");
+      } finally {
+        if (active) setCloudWorkspaceLoading(false);
       }
     })();
     return () => { active = false; };
   }, [cloudSession?.user.id, cloudRefreshTick]);
+
+  useEffect(() => {
+    const client = supabase;
+    const userId = cloudSession?.user.id;
+    if (!client || !userId || cloudFamily) return;
+
+    const refreshMembership = debounce(() => setCloudRefreshTick((tick) => tick + 1), 250);
+    const channel = client.channel(`pending-family-${userId}`)
+      .on("postgres_changes", {
+        event: "*",
+        schema: "public",
+        table: "family_members",
+        filter: `user_id=eq.${userId}`,
+      }, refreshMembership)
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") refreshMembership();
+      });
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refreshMembership();
+    };
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+
+    return () => {
+      refreshMembership.cancel();
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      void client.removeChannel(channel);
+    };
+  }, [cloudSession?.user.id, cloudFamily?.id]);
 
   useEffect(() => {
     const client = supabase;
@@ -982,6 +1201,7 @@ export default function App() {
       : memberName.trim() || "Family member";
     const timestamp = new Date().toISOString();
     if (cloudFamily && selectedCat && typeof selectedCat.id === "string") {
+      if (cloudSession) clearWorkspaceCache(cloudSession.user.id);
       const inferredDelta = amountDelta ?? (detail === "Marked done" ? 1 : detail === "Undid this check-in" ? -1 : 1);
       const pendingAction: PendingCareAction = {
         id: crypto.randomUUID(),
@@ -1049,6 +1269,7 @@ export default function App() {
       cansGoal: { metric: "wet_food", unit: "cans" },
     };
     if (cloudFamily && selectedCat && typeof selectedCat.id === "string" && typeof value === "number" && targetMetric[key]) {
+      if (cloudSession) clearWorkspaceCache(cloudSession.user.id);
       const target = targetMetric[key]!;
       const date = getFamilyCareWindow(cloudFamily.timezone).today;
       void saveTarget(cloudFamily.id, selectedCat.id, target.metric, "daily", value, target.unit, date)
@@ -1118,7 +1339,7 @@ export default function App() {
     let croppedPhoto: string | undefined;
     if (newCatPhoto) {
       try {
-        croppedPhoto = await cropCatPhoto(newCatPhoto, newCatPhotoPosition);
+        croppedPhoto = await cropCatPhoto(newCatPhoto, { ...newCatPhotoPosition, zoom: newCatPhotoZoom });
       } catch (cause) {
         setPhotoError(errorMessage(cause, "Could not prepare the cat photo crop."));
         return;
@@ -1126,6 +1347,7 @@ export default function App() {
     }
     if (cloudFamily) {
       try {
+        if (cloudSession) clearWorkspaceCache(cloudSession.user.id);
         const created = await addCloudCat(cloudFamily.id, name, colors[cats.length % colors.length]);
         let photo: string | undefined;
         if (croppedPhoto) {
@@ -1141,6 +1363,7 @@ export default function App() {
         setNewCatName("");
         setNewCatPhoto(undefined);
         setNewCatPhotoPosition({ x: 50, y: 50 });
+        setNewCatPhotoZoom(1);
         setPhotoError("");
         setShowAddCat(false);
       } catch (cause) {
@@ -1160,25 +1383,19 @@ export default function App() {
     setNewCatName("");
     setNewCatPhoto(undefined);
     setNewCatPhotoPosition({ x: 50, y: 50 });
+    setNewCatPhotoZoom(1);
     setPhotoError("");
     setShowAddCat(false);
   };
 
-  const setCatPhoto = async (file?: File, catId = selectedId) => {
+  const openCatPhotoEditor = async (file?: File, catId = selectedId) => {
     if (!file) return;
     try {
-      const compressedPhoto = await compressCatPhoto(file);
-      const photo = await blobToDataUrl(compressedPhoto);
-      if (cloudFamily && typeof catId === "string") {
-        const compressedFile = new File([compressedPhoto], "cat-photo.jpg", { type: "image/jpeg" });
-        const path = await uploadCatPhoto(cloudFamily.id, catId, compressedFile);
-        const photoUrl = await getCatPhotoUrl(path);
-        setCats((current) => current.map((cat) => cat.id === catId ? { ...cat, photo: photoUrl } : cat));
-        setPhotoError("");
-        setCloudError("");
-        return;
-      }
-      setCats((current) => current.map((cat) => cat.id === catId ? { ...cat, photo } : cat));
+      const photo = await readCatPhoto(file);
+      setPhotoEditCatId(catId);
+      setPhotoEditDraft(photo);
+      setNewCatPhotoPosition({ x: 50, y: 50 });
+      setNewCatPhotoZoom(1);
       setPhotoError("");
       setCloudError("");
     } catch (cause) {
@@ -1188,8 +1405,45 @@ export default function App() {
     }
   };
 
+  const saveCatPhotoEdit = async () => {
+    if (photoEditCatId === null || !photoEditDraft || photoEditSaving) return;
+    const catId = photoEditCatId;
+    setPhotoEditSaving(true);
+    try {
+      const croppedPhoto = await cropCatPhoto(photoEditDraft, { ...newCatPhotoPosition, zoom: newCatPhotoZoom });
+      if (cloudFamily && typeof catId === "string") {
+        if (cloudSession) clearWorkspaceCache(cloudSession.user.id);
+        const blob = await fetch(croppedPhoto).then((response) => response.blob());
+        const file = new File([blob], "cat-photo.jpg", { type: blob.type || "image/jpeg" });
+        const path = await uploadCatPhoto(cloudFamily.id, catId, file);
+        const photoUrl = await getCatPhotoUrl(path);
+        setCats((current) => current.map((cat) => cat.id === catId ? { ...cat, photo: photoUrl } : cat));
+      } else {
+        setCats((current) => current.map((cat) => cat.id === catId ? { ...cat, photo: croppedPhoto } : cat));
+      }
+      setPhotoEditCatId(null);
+      setPhotoEditDraft(undefined);
+      setPhotoError("");
+      setCloudError("");
+    } catch (cause) {
+      const message = errorMessage(cause, "Could not process this photo.");
+      setPhotoError(message);
+      if (cloudFamily) setCloudError(`Could not save the cat photo: ${message}`);
+    } finally {
+      setPhotoEditSaving(false);
+    }
+  };
+
+  const cancelCatPhotoEdit = () => {
+    if (photoEditSaving) return;
+    setPhotoEditCatId(null);
+    setPhotoEditDraft(undefined);
+    setPhotoError("");
+  };
+
   const renameCat = async (cat: Cat, name: string) => {
     try {
+      if (cloudFamily && cloudSession) clearWorkspaceCache(cloudSession.user.id);
       if (cloudFamily && typeof cat.id === "string") await updateCloudCat(cat.id, { name });
       setCats((current) => current.map((entry) => entry.id === cat.id ? { ...entry, name, initial: name[0]?.toUpperCase() ?? "?" } : entry));
       setCloudError("");
@@ -1200,8 +1454,15 @@ export default function App() {
   };
 
   const removeCat = async (cat: Cat) => {
-    if (!window.confirm(`Remove ${cat.name} from the family tracker? Their care history will be kept.`)) return;
+    setPendingCatRemoval(cat);
+  };
+
+  const confirmRemoveCat = async () => {
+    const cat = pendingCatRemoval;
+    if (!cat || catRemovalBusy) return;
+    setCatRemovalBusy(true);
     try {
+      if (cloudFamily && cloudSession) clearWorkspaceCache(cloudSession.user.id);
       if (cloudFamily && typeof cat.id === "string") await archiveCloudCat(cat.id);
       const nextCats = cats.filter((entry) => entry.id !== cat.id);
       setCats(nextCats);
@@ -1211,6 +1472,9 @@ export default function App() {
       setCloudError("");
     } catch (cause) {
       setCloudError(errorMessage(cause, "Could not remove that cat."));
+    } finally {
+      setCatRemovalBusy(false);
+      setPendingCatRemoval(null);
     }
   };
 
@@ -1240,6 +1504,32 @@ export default function App() {
     { key: "played", label: "Playtime", shortLabel: "Play", icon: "yarn", color: "purple", unit: "session" },
   ];
   const activeItem = mobileMetrics.find((item) => item.key === activeMetric)!;
+  const switchTrackingMode = (direction: -1 | 1) => {
+    setActiveMetric((current) => {
+      const index = mobileMetrics.findIndex((item) => item.key === current);
+      return mobileMetrics[(index + direction + mobileMetrics.length) % mobileMetrics.length].key;
+    });
+    setUndoAction(null);
+    setTapBurst(0);
+    setShowBreakdown(false);
+  };
+  const handleTrackerPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "mouse" || showBreakdown) return;
+    swipeStart.current = { x: event.clientX, y: event.clientY };
+  };
+  const handleTrackerPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    const start = swipeStart.current;
+    swipeStart.current = null;
+    if (!start || showBreakdown) return;
+    const deltaX = event.clientX - start.x;
+    const deltaY = event.clientY - start.y;
+    if (Math.abs(deltaX) < 48 || Math.abs(deltaX) < Math.abs(deltaY) * 1.25) return;
+    ignoreNextTap.current = true;
+    window.setTimeout(() => { ignoreNextTap.current = false; }, 350);
+    const direction = deltaX < 0 ? 1 : -1;
+    setModeSwipeTransition((current) => ({ direction: direction > 0 ? "next" : "previous", key: (current?.key ?? 0) + 1 }));
+    switchTrackingMode(direction);
+  };
   const activeValue = tracker[activeMetric] as number | boolean;
   const activeGoal = activeItem.goal ? (tracker[activeItem.goal] as number) : undefined;
   const breakdownAmount = activeMetric === "cans"
@@ -1260,12 +1550,12 @@ export default function App() {
         ? timestamp >= new Date(todayWindow.weekFrom) && timestamp < new Date(todayWindow.tomorrowFrom)
         : getLocalWeekKey(timestamp) === getLocalWeekKey(now)
       : isToday;
-    const isPositiveAction = entry.detail.startsWith("Added")
+    const isCareAction = getCareLogDelta(entry) !== undefined
       || entry.detail.startsWith("Completed")
       || entry.detail === "Marked done";
-    return String(entry.catId) === String(selectedId) && (entry.metric ? entry.metric === activeMetric : entry.what === metricLabels[activeMetric]) && isInPeriod && isPositiveAction;
+    return String(entry.catId) === String(selectedId) && (entry.metric ? entry.metric === activeMetric : entry.what === metricLabels[activeMetric]) && isInPeriod && isCareAction;
   });
-  const visibleActivityEntries = batchCareLogs(activityEntries);
+  const visibleActivityEntries = batchCareLogs(removeUndoneCareLogs(activityEntries));
   const contributionTimeFormat = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
   const contributionPeriod = activeMetric === "ears" ? "This week" : "Today";
 
@@ -1335,6 +1625,9 @@ export default function App() {
   if (isSupabaseConfigured && (!cloudSession || authLoading)) {
     return <SignInScreen busy={authBusy} error={cloudError} loading={authLoading} onSignIn={() => void startGoogleSignIn()} toolbar={themeToggle} />;
   }
+  if (isSupabaseConfigured && cloudWorkspaceLoading && !cloudFamily) {
+    return <main aria-busy="true" className="family-portal-loading app-workspace-loading"><span className="family-loading-spinner" />Loading your family and cats…</main>;
+  }
 
   return (
     <div className="app-root">
@@ -1395,7 +1688,7 @@ export default function App() {
               <h1>{selectedCat.name}</h1>
               <label className="photo-picker">
                 {selectedCat.photo ? "Change photo" : "Add a photo"}
-                <input accept="image/*,.heic,.heif" type="file" onChange={(event) => void setCatPhoto(event.target.files?.[0])} />
+                <input accept="image/*,.heic,.heif" type="file" onChange={(event) => { void openCatPhotoEditor(event.target.files?.[0]); event.target.value = ""; }} />
               </label>
             </div>
             <div className="mobile-cat-picker">
@@ -1424,11 +1717,20 @@ export default function App() {
           </div>
           {cloudError && <p className="cloud-feedback" role="status">{cloudError}</p>}
 
-          <div className="mobile-section-title action-title">
-            <div><h2>Quick update</h2></div>
+          <div className="mobile-tracker-actions">
+            <button className="track-picker-trigger" onClick={() => setShowTrackPicker(true)} type="button">
+              <Icon name="more" size={16} />
+              Care Menu
+            </button>
+            <button className="edit-goals-trigger" onClick={openGoalEditor} type="button"><Icon name="settings" size={15} /> Edit goals</button>
           </div>
 
-          <div className={`big-tap-wrap ${activeItem.color} ${showBreakdown ? "is-flipped" : ""}`}>
+          <div
+            className={`big-tap-wrap ${activeItem.color} ${showBreakdown ? "is-flipped" : ""}`}
+            onPointerDown={handleTrackerPointerDown}
+            onPointerUp={handleTrackerPointerUp}
+            onPointerCancel={() => { swipeStart.current = null; }}
+          >
           {undoAction && String(undoAction.catId) === String(selectedId) && !showBreakdown && (
             <button aria-label={`Undo last ${undoAction.metric === "cans" ? "wet food tap" : "+1"}`} className="tap-undo-icon" onClick={undoLastTap} title="Undo last check-in" type="button">
               <Icon name="undo" size={17} />
@@ -1436,12 +1738,17 @@ export default function App() {
           )}
           <div className="big-tap-flip">
           <button
+            key={modeSwipeTransition?.key ?? 0}
             aria-label={isToggle ? `Toggle ${activeItem.label}` : `Add one ${activeItem.unit}`}
             aria-hidden={showBreakdown}
-            className={`big-tap-card ${activeItem.color} metric-${activeMetric} ${isComplete ? "complete" : ""}`}
+            className={`big-tap-card ${activeItem.color} metric-${activeMetric} ${isComplete ? "complete" : ""} ${modeSwipeTransition ? `mode-swipe-${modeSwipeTransition.direction}` : ""}`}
             disabled={showBreakdown}
             tabIndex={showBreakdown ? -1 : 0}
             onClick={() => {
+              if (ignoreNextTap.current) {
+                ignoreNextTap.current = false;
+                return;
+              }
               setShowBreakdown(false);
               handleBigTap();
             }}
@@ -1557,40 +1864,36 @@ export default function App() {
                 ? "This check-in resets each week"
                 : "Tap the big card whenever it happens"}
           </p>
-          <div className="mobile-section-title">
-            <div><h2>Change what you’re tracking</h2></div>
-            <div className="section-one-actions">
-              <button onClick={openGoalEditor}><Icon name="settings" size={14} /> Edit goals</button>
-            </div>
-          </div>
-          <div className="mobile-item-grid">
-            {mobileMetrics.map((item) => {
-              const value = tracker[item.key];
-              const done = typeof value === "boolean" ? value : value > 0;
-              return (
-                <button
-                  className={`${item.color} ${activeMetric === item.key ? "active" : ""}`}
-                  key={item.key}
-                  onClick={() => {
-                    setActiveMetric(item.key);
-                    setUndoAction(null);
-                    setTapBurst(0);
-                    setShowBreakdown(false);
-                  }}
-                >
-                  <span><Icon name={item.icon} size={21} /></span>
-                  <strong>{item.shortLabel}</strong>
-                  {item.goal && (
-                    <>
-                      <small className="tile-goal-count">{Number(value)} / {Number(tracker[item.goal])}</small>
-                      <GoalProgress className="tile-goal-progress" value={Number(value)} goal={Number(tracker[item.goal])} />
-                    </>
-                  )}
-                  {done && <i><Icon name="check" size={10} /></i>}
-                </button>
-              );
-            })}
-          </div>
+          {showTrackPicker && <div className="track-picker-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowTrackPicker(false); }}>
+            <section aria-labelledby="track-picker-title" aria-modal="true" className="track-picker-dialog" role="dialog">
+              <header><div><span>Care tracker</span><h2 id="track-picker-title">What would you like to track?</h2></div><button aria-label="Close tracking options" onClick={() => setShowTrackPicker(false)} type="button">×</button></header>
+              <div className="mobile-item-grid">
+                {mobileMetrics.map((item) => {
+                  const value = tracker[item.key];
+                  const done = typeof value === "boolean" ? value : value > 0;
+                  return <button
+                    aria-pressed={activeMetric === item.key}
+                    className={`${item.color} ${activeMetric === item.key ? "active" : ""}`}
+                    key={item.key}
+                    onClick={() => {
+                      setActiveMetric(item.key);
+                      setUndoAction(null);
+                      setTapBurst(0);
+                      setShowBreakdown(false);
+                      setShowTrackPicker(false);
+                    }}
+                    type="button"
+                  >
+                    <span><Icon name={item.icon} size={21} /></span>
+                    <strong>{item.shortLabel}</strong>
+                    {item.goal && <><small className="tile-goal-count">{Number(value)} / {Number(tracker[item.goal])}</small><GoalProgress className="tile-goal-progress" value={Number(value)} goal={Number(tracker[item.goal])} /></>}
+                    {done && <i><Icon name="check" size={10} /></i>}
+                  </button>;
+                })}
+              </div>
+              <p className="track-picker-hint">You can also swipe left or right on the care card.</p>
+            </section>
+          </div>}
 
           <CareLogPanel cat={selectedCat} logs={careLogs} memberName={memberName} onMemberNameChange={setMemberName} timezone={cloudFamily?.timezone} cloudMode={Boolean(cloudFamily)} expanded={careLogExpanded} onToggle={() => setCareLogExpanded((open) => !open)} />
         </section>
@@ -1605,7 +1908,7 @@ export default function App() {
               <p className="date"><Icon name="calendar" size={16} /> {dateLabel}</p>
               <label className="photo-picker">
                 {selectedCat.photo ? "Change photo" : "Add a photo"}
-                <input accept="image/*,.heic,.heif" type="file" onChange={(event) => void setCatPhoto(event.target.files?.[0])} />
+                <input accept="image/*,.heic,.heif" type="file" onChange={(event) => { void openCatPhotoEditor(event.target.files?.[0]); event.target.value = ""; }} />
               </label>
               {photoError && <small className="photo-error">{photoError}</small>}
             </div>
@@ -1738,6 +2041,7 @@ export default function App() {
                       try {
                         setNewCatPhoto(await readCatPhoto(file));
                         setNewCatPhotoPosition({ x: 50, y: 50 });
+                        setNewCatPhotoZoom(1);
                         setPhotoError("");
                       } catch (cause) {
                         setPhotoError(errorMessage(cause, "Could not decode this photo."));
@@ -1751,57 +2055,30 @@ export default function App() {
               </span>
             </label>
             {newCatPhoto && (
-              <div className="cat-photo-crop-section">
-                <div
-                  aria-label="Cat photo circular crop preview. Drag the photo to adjust the crop."
-                  className="cat-photo-crop-preview"
-                  onPointerDown={(event) => {
-                    event.currentTarget.setPointerCapture(event.pointerId);
-                    catPhotoCropDrag.current = {
-                      pointerId: event.pointerId,
-                      startX: event.clientX,
-                      startY: event.clientY,
-                      originX: newCatPhotoPosition.x,
-                      originY: newCatPhotoPosition.y,
-                    };
-                  }}
-                  onPointerMove={(event) => {
-                    const drag = catPhotoCropDrag.current;
-                    if (!drag || drag.pointerId !== event.pointerId) return;
-                    const bounds = event.currentTarget.getBoundingClientRect();
-                    const clamp = (value: number) => Math.min(100, Math.max(0, value));
-                    setNewCatPhotoPosition({
-                      x: clamp(drag.originX - ((event.clientX - drag.startX) / bounds.width) * 100),
-                      y: clamp(drag.originY - ((event.clientY - drag.startY) / bounds.height) * 100),
-                    });
-                  }}
-                  onPointerUp={() => { catPhotoCropDrag.current = null; }}
-                  onPointerCancel={() => { catPhotoCropDrag.current = null; }}
-                  role="group"
-                  style={{ touchAction: "none" }}
-                >
-                  <img alt="" draggable={false} src={newCatPhoto} style={{ objectPosition: `${newCatPhotoPosition.x}% ${newCatPhotoPosition.y}%` }} />
-                  <span aria-hidden="true" className="cat-photo-crop-frame" />
-                </div>
-                <p>Drag the photo to choose what appears in the circle.</p>
-                <div className="cat-photo-crop-controls">
-                  <label>
-                    Horizontal crop
-                    <input aria-label="Horizontal photo crop" max="100" min="0" onChange={(event) => setNewCatPhotoPosition((position) => ({ ...position, x: Number(event.target.value) }))} type="range" value={newCatPhotoPosition.x} />
-                  </label>
-                  <label>
-                    Vertical crop
-                    <input aria-label="Vertical photo crop" max="100" min="0" onChange={(event) => setNewCatPhotoPosition((position) => ({ ...position, y: Number(event.target.value) }))} type="range" value={newCatPhotoPosition.y} />
-                  </label>
-                </div>
-              </div>
+              <CatPhotoCropEditor photo={newCatPhoto} position={newCatPhotoPosition} onPositionChange={setNewCatPhotoPosition} zoom={newCatPhotoZoom} onZoomChange={setNewCatPhotoZoom} />
             )}
             {photoError && <small className="photo-error">{photoError}</small>}
             <div className="modal-actions">
-              <button type="button" onClick={() => { setShowAddCat(false); setNewCatPhoto(undefined); setNewCatPhotoPosition({ x: 50, y: 50 }); setPhotoError(""); }}>Cancel</button>
+              <button type="button" onClick={() => { setShowAddCat(false); setNewCatPhoto(undefined); setNewCatPhotoPosition({ x: 50, y: 50 }); setNewCatPhotoZoom(1); setPhotoError(""); }}>Cancel</button>
               <button type="submit" disabled={!newCatName.trim()}><Icon name="plus" size={17} /> Add cat</button>
             </div>
           </form>
+        </div>
+      )}
+
+      {photoEditCatId !== null && photoEditDraft && (
+        <div className="modal-backdrop" onMouseDown={cancelCatPhotoEdit}>
+          <section aria-labelledby="edit-cat-photo-title" aria-modal="true" className="modal" onMouseDown={(event) => event.stopPropagation()} role="dialog">
+            <span className="modal-icon"><Icon name="paw" size={24} /></span>
+            <h2 id="edit-cat-photo-title">Change {cats.find((cat) => cat.id === photoEditCatId)?.name ?? "cat"}’s photo</h2>
+            <p>Choose how the photo appears in the cat icon.</p>
+            <CatPhotoCropEditor photo={photoEditDraft} position={newCatPhotoPosition} onPositionChange={setNewCatPhotoPosition} zoom={newCatPhotoZoom} onZoomChange={setNewCatPhotoZoom} />
+            {photoError && <small className="photo-error">{photoError}</small>}
+            <div className="modal-actions">
+              <button disabled={photoEditSaving} onClick={cancelCatPhotoEdit} type="button">Cancel</button>
+              <button disabled={photoEditSaving} onClick={() => void saveCatPhotoEdit()} type="button">{photoEditSaving ? "Saving…" : "Save photo"}</button>
+            </div>
+          </section>
         </div>
       )}
 
@@ -1867,15 +2144,24 @@ export default function App() {
         cats={cats}
         error={cloudError || photoError}
         familyName={cloudFamily?.name}
+        onManageFamily={() => setActiveTab("family")}
         onAdd={() => setShowAddCat(true)}
-        onPhoto={(id, file) => void setCatPhoto(file, id)}
+        onPhoto={(id, file) => void openCatPhotoEditor(file, id)}
         onRemove={removeCat}
         onRename={renameCat}
         onSelect={(id) => { setSelectedId(id); setUndoAction(null); setActiveTab("care"); }}
         selectedId={selectedId}
         summaries={Object.fromEntries(cats.map((cat) => { const current = { ...emptyTracker, ...(trackers[String(cat.id)] ?? {}) }; return [String(cat.id), { ...current, ears: current.earsWeek === (cloudFamily ? getFamilyCareWindow(cloudFamily.timezone).weekStart : getLocalWeekKey()) && current.ears }]; }))}
       />}
-      {activeTab === "family" && <FamilyPortal cats={cats.filter((cat) => cat.id !== "family-needs-cat")} onClose={() => { returnToCare(); setCloudRefreshTick((tick) => tick + 1); }} onManageCats={() => setActiveTab("cats")} />}
+      {activeTab === "family" && <FamilyPortal cats={cats} initialFamily={cloudFamily ?? undefined} initialMembers={cloudFamily ? cloudMembers : undefined} initialSession={cloudSession} onClose={() => { setActiveTab(cloudFamily ? "care" : "cats"); setCloudRefreshTick((tick) => tick + 1); }} onManageCats={() => setActiveTab("cats")} onSelectCat={(id) => { setSelectedId(id); setUndoAction(null); setActiveTab("care"); }} />}
+      {pendingCatRemoval && <ConfirmDialog
+        title={`Remove ${pendingCatRemoval.name}?`}
+        description={`${pendingCatRemoval.name} will be removed from your family tracker. Their existing care history will be kept.`}
+        confirmLabel="Remove cat"
+        busy={catRemovalBusy}
+        onCancel={() => setPendingCatRemoval(null)}
+        onConfirm={() => void confirmRemoveCat()}
+      />}
     </div>
   );
 }

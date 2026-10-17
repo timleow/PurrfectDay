@@ -31,3 +31,16 @@ These criteria turn the family-tracker decisions from the product conversation i
 - **GOAL-1:** Daily food goals can be edited without the dialog closing or the value being overwritten while typing; changes are applied when the user confirms.
 - **PHOTO-1:** The cat photo/avatar is prominent in the selected-cat mobile picker and the larger tracker avatar.
 - **PHOTO-2:** The add-cat photo picker presents a “Choose file!” control without the browser’s default no-file text.
+- **PHOTO-3:** Before adding a cat, the selected photo is previewed in the circular crop and can be repositioned and zoomed.
+- **PHOTO-4:** Cat photo files stay private to the family; signed-in family members can view photos added by another member.
+- **CATS-3:** A user without a family starts with no sample cats and sees clear create-family and invited-to-family paths.
+- **CATS-4:** Selecting a cat from the Cats overview opens Care with that cat selected.
+- **FAM-7:** When an account is added by email, returning to the app refreshes family membership and cats without requiring a sign-out or reload.
+- **FAM-8:** Family data loading ends in a retryable error state if a request stalls; returning to the app refreshes the workspace.
+- **FAM-9:** New members use their Google profile name by default, and any family member can edit any member’s display name.
+- **CARE-8:** The Today care-log view shows its date and date picker; moving to another date switches the period to By day.
+- **CARE-9:** The care activity log and “Who did?” breakdown omit positive check-ins that were later undone by the same member, while preserving other members’ activity.
+- **CARE-10:** The Care view has one “Track something else” action that opens a dialog with all nine tracking modes; the previous “Quick update” and “Change what you’re tracking” labels are absent.
+- **CARE-11:** Swiping horizontally on the main care card moves to the next or previous tracking mode, wraps around at either end, and does not record a check-in.
+- **CACHE-1:** A fresh per-account workspace snapshot can render family, member, cat, and photo details while Supabase refreshes in the background; live responses replace the cached snapshot, and cache writes do not replace backend mutations.
+- **CACHE-2:** Cached workspace data is isolated by account, expires after five minutes, and can be cleared after access changes or writes.

@@ -74,6 +74,8 @@ For the family owner's currently configured Supabase project:
 | [`20261016000000_family_care_backend.sql`](supabase/migrations/20261016000000_family_care_backend.sql) | Applied |
 | [`20261017000000_family_management.sql`](supabase/migrations/20261017000000_family_management.sql) | Applied |
 | [`20261017100000_google_profile_photos.sql`](supabase/migrations/20261017100000_google_profile_photos.sql) | Pending; apply to enable Google profile photos for other family members |
+| [`20261018100000_family_member_names.sql`](supabase/migrations/20261018100000_family_member_names.sql) | Pending; apply to enable shared member-name editing and Google-name defaults |
+| [`20261019100000_family_deletion.sql`](supabase/migrations/20261019100000_family_deletion.sql) | Pending; apply to enable family deletion |
 
 This status is specific to the owner's project and may differ for another Supabase project. Never edit a migration that has already been applied; add a new timestamped migration instead.
 
