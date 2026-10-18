@@ -44,3 +44,4 @@ These criteria turn the family-tracker decisions from the product conversation i
 - **CARE-11:** Swiping horizontally on the main care card moves to the next or previous tracking mode, wraps around at either end, and does not record a check-in.
 - **CACHE-1:** A fresh per-account workspace snapshot can render family, member, cat, and photo details while Supabase refreshes in the background; live responses replace the cached snapshot, and cache writes do not replace backend mutations.
 - **CACHE-2:** Cached workspace data is isolated by account, expires after five minutes, and can be cleared after access changes or writes.
+- **CACHE-3:** After the first online production launch, an installed app can load its cached shell and static assets without a network connection; Supabase data and care recording still require connectivity.

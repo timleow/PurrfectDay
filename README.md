@@ -61,6 +61,8 @@ supabase/
 
 The browser talks to Supabase using the public project URL and publishable key. Postgres row-level security (RLS) scopes shared data to family members. Care entries use the signed-in person as the actor. Do not bypass RLS or accept a person identity supplied by the client.
 
+Production builds register a service worker that caches the app shell and versioned same-origin assets for home-screen launches and offline startup. Supabase requests and private photos are not cached by the service worker. A recent, per-account workspace snapshot is also stored locally to render while Supabase refreshes; recording and syncing care still requires a connection.
+
 The main entities are profiles, families, family members, cats, target rules, and timestamped care events. Day and week summaries are derived from events and the family's timezone; there are no persisted day/week tables. A person belongs to one family, all family members can edit, and adding someone by email adds them directly without a separate acceptance flow.
 
 ## Database migrations

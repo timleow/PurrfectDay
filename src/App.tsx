@@ -319,7 +319,7 @@ function removeUndoneCareLogs(logs: CareLog[]) {
     const actor = entry.actorUserId ?? entry.who;
     for (const candidate of remaining) {
       if (toUndo <= 0.000001) break;
-      if (candidate.delta <= 0 || getLogMetric(candidate.entry) !== getLogMetric(entry)) continue;
+      if (candidate.delta <= 0 || String(candidate.entry.catId) !== String(entry.catId) || getLogMetric(candidate.entry) !== getLogMetric(entry)) continue;
       if ((candidate.entry.actorUserId ?? candidate.entry.who) !== actor) continue;
       const canceled = Math.min(candidate.delta, toUndo);
       candidate.delta -= canceled;
@@ -941,7 +941,6 @@ export default function App() {
   const [undoRevealUntil, setUndoRevealUntil] = useState(0);
   const [undoNow, setUndoNow] = useState(() => Date.now());
   const [showNotifications, setShowNotifications] = useState(false);
-  const [notificationsSeenAt, setNotificationsSeenAt] = useState(() => Number(localStorage.getItem("purrfect-notifications-seen-at") || Date.now()));
   const catSwipeStart = useRef<{ x: number; y: number } | null>(null);
   const ignoreNextCatTap = useRef(false);
 
@@ -992,10 +991,6 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [undoActions.length]);
 
-  useEffect(() => {
-    localStorage.setItem("purrfect-notifications-seen-at", String(notificationsSeenAt));
-  }, [notificationsSeenAt]);
-
   const themeToggle = (
     <button
       aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
@@ -1008,10 +1003,18 @@ export default function App() {
     </button>
   );
 
+  const notificationReadKey = `purrfect-notifications-seen-at:${cloudSession?.user.id ?? "local"}`;
+  const notificationsSeenAt = Number(localStorage.getItem(notificationReadKey) ?? Date.now());
+  const currentMemberName = cloudFamily && cloudSession
+    ? cloudMembers.find((member) => member.user_id === cloudSession.user.id)?.display_name || cloudSession.user.email?.split("@")[0] || "Family member"
+    : memberName.trim() || "Family member";
   const notificationEntries = batchCareLogs(removeUndoneCareLogs(careLogs)
     .filter((entry) => {
       const delta = getCareLogDelta(entry);
-      return delta === undefined || delta > 0;
+      const isOwnAction = entry.actorUserId
+        ? entry.actorUserId === cloudSession?.user.id
+        : Boolean(currentMemberName && entry.who === currentMemberName);
+      return !isOwnAction && (delta === undefined || delta > 0);
     }))
     .slice(0, 30);
   const unreadNotificationCount = notificationEntries.filter((entry) => new Date(entry.timestamp).getTime() > notificationsSeenAt).length;
@@ -1020,7 +1023,7 @@ export default function App() {
       <button aria-expanded={showNotifications} aria-label="Care notifications" className="notification-trigger" onClick={() => {
         const opening = !showNotifications;
         setShowNotifications(opening);
-        if (opening) setNotificationsSeenAt(Date.now());
+        if (opening) localStorage.setItem(notificationReadKey, String(Date.now()));
       }} type="button">
         <Icon name="bell" size={16} />
         {unreadNotificationCount > 0 && <span className="notification-badge">{unreadNotificationCount > 9 ? "9+" : unreadNotificationCount}</span>}

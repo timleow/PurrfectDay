@@ -9,12 +9,13 @@ const snapshot = {
   events: [],
 };
 
-beforeEach(() => sessionStorage.clear());
+beforeEach(() => localStorage.clear());
 
 describe("private workspace display cache", () => {
   it("stores family, cats, members, and photo URLs only for the matching signed-in account", () => {
     writeWorkspaceCache("person-1", snapshot);
 
+    expect(localStorage.getItem("purrfect-workspace-v1:person-1")).not.toBeNull();
     expect(readWorkspaceCache("person-1")?.cats[0].photo).toBe("https://storage.example/mochi.jpg");
     expect(readWorkspaceCache("other-person")).toBeNull();
   });

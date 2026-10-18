@@ -18,15 +18,15 @@ function cacheKey(userId: string) {
 
 export function readWorkspaceCache(userId: string, now = Date.now()): CachedWorkspace | null {
   try {
-    const raw = sessionStorage.getItem(cacheKey(userId));
+    const raw = localStorage.getItem(cacheKey(userId));
     if (!raw) return null;
     const cached = JSON.parse(raw) as CachedWorkspace;
     if (!cached.family?.id || !Array.isArray(cached.cats) || !Array.isArray(cached.members) || !Array.isArray(cached.targets) || !Array.isArray(cached.events)) {
-      sessionStorage.removeItem(cacheKey(userId));
+      localStorage.removeItem(cacheKey(userId));
       return null;
     }
     if (!Number.isFinite(cached.savedAt) || now - cached.savedAt > WORKSPACE_CACHE_TTL || cached.savedAt > now) {
-      sessionStorage.removeItem(cacheKey(userId));
+      localStorage.removeItem(cacheKey(userId));
       return null;
     }
     return cached;
@@ -37,12 +37,12 @@ export function readWorkspaceCache(userId: string, now = Date.now()): CachedWork
 
 export function writeWorkspaceCache(userId: string, workspace: Omit<CachedWorkspace, "savedAt">) {
   try {
-    sessionStorage.setItem(cacheKey(userId), JSON.stringify({ ...workspace, savedAt: Date.now() } satisfies CachedWorkspace));
+    localStorage.setItem(cacheKey(userId), JSON.stringify({ ...workspace, savedAt: Date.now() } satisfies CachedWorkspace));
   } catch {
     // Storage may be disabled or full; network-backed workspace loading still works.
   }
 }
 
 export function clearWorkspaceCache(userId: string) {
-  try { sessionStorage.removeItem(cacheKey(userId)); } catch { /* optional cache */ }
+  try { localStorage.removeItem(cacheKey(userId)); } catch { /* optional cache */ }
 }

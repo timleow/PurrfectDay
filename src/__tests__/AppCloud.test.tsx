@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeWorkspaceCache } from "../data/workspaceCache";
@@ -77,6 +77,37 @@ beforeEach(() => {
 });
 
 describe("rapid shared-care updates", () => {
+  it("shows only other members' active care actions and stores notification reads per user", async () => {
+    const now = Date.now();
+    cloudMocks.listFamilyMembers.mockResolvedValue([
+      { id: "member-1", family_id: "family-1", user_id: "person-1", email: "member@example.com", display_name: "Member", added_at: "2026-01-01T00:00:00.000Z" },
+      { id: "member-2", family_id: "family-1", user_id: "person-2", email: "other@example.com", display_name: "Other", added_at: "2026-01-01T00:00:00.000Z" },
+    ]);
+    cloudMocks.persistedEvents = [
+      { id: "own-action", family_id: "family-1", cat_id: "cat-1", actor_user_id: "person-1", metric: "treats", amount_delta: 1, unit: "treats", detail: "Added 1 treat", occurred_at: new Date(now - 40_000).toISOString() },
+      { id: "undone-action", family_id: "family-1", cat_id: "cat-1", actor_user_id: "person-2", metric: "treats", amount_delta: 1, unit: "treats", detail: "Added 1 treat", occurred_at: new Date(now - 30_000).toISOString() },
+      { id: "undo-action", family_id: "family-1", cat_id: "cat-1", actor_user_id: "person-2", metric: "treats", amount_delta: -1, unit: "treats", detail: "Removed 1 treat", occurred_at: new Date(now - 20_000).toISOString() },
+      { id: "other-active-action", family_id: "family-1", cat_id: "cat-1", actor_user_id: "person-2", metric: "treats", amount_delta: 2, unit: "treats", detail: "Added 2 treats", occurred_at: new Date(now - 10_000).toISOString() },
+    ];
+    localStorage.setItem("purrfect-notifications-seen-at:person-1", String(now - 60_000));
+    localStorage.setItem("purrfect-notifications-seen-at:person-2", "123");
+    localStorage.setItem("purrfect-notifications-seen-at", "456");
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Care notifications" }));
+
+    const recentCare = screen.getByRole("dialog", { name: "Recent care activity" });
+    expect(within(recentCare).getByText("Other · Mochi")).not.toBeNull();
+    expect(within(recentCare).getByText("Added 2 treats")).not.toBeNull();
+    expect(within(recentCare).queryByText("Member · Mochi")).toBeNull();
+    expect(within(recentCare).queryByText("Added 1 treat")).toBeNull();
+    expect(within(recentCare).queryByText("Removed 1 treat")).toBeNull();
+    expect(Number(localStorage.getItem("purrfect-notifications-seen-at:person-1"))).toBeGreaterThan(now - 60_000);
+    expect(localStorage.getItem("purrfect-notifications-seen-at:person-2")).toBe("123");
+    expect(localStorage.getItem("purrfect-notifications-seen-at")).toBe("456");
+  });
+
   it("shows a recent cached workspace immediately while refreshing it from Supabase", async () => {
     const family = { id: "family-1", name: "My family", timezone: "Asia/Singapore" };
     const event = { id: "cached-event", family_id: "family-1", cat_id: "cat-1", actor_user_id: "person-1", metric: "treats", amount_delta: 2, unit: "treats", detail: "Added 2 treats", occurred_at: new Date().toISOString() };
