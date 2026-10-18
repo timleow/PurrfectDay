@@ -394,7 +394,7 @@ export default function FamilyPortal({ onClose, cats = [], onManageCats = () => 
             <div className="family-portal-user">Signed in as <strong>{session.user.email}</strong></div>
             <h3>Welcome to your family</h3>
             <p>If you were invited, your family may still be syncing. Refresh to check. Otherwise, create a family and invite your people.</p>
-            <label>Family name<input autoFocus maxLength={80} onChange={(event) => setFamilyName(event.target.value)} placeholder="The Lee family" required value={familyName} /></label>
+            <label>Family name<input maxLength={80} onChange={(event) => setFamilyName(event.target.value)} placeholder="The Lee family" required value={familyName} /></label>
             <div className="family-create-actions"><button className="family-secondary-button" onClick={() => { setLoading(true); setWorkspaceLoadTick((tick) => tick + 1); }} type="button">I was invited · Refresh</button><button className="family-primary-button" disabled={busy} type="submit">{busy ? "Creating…" : "Create family"}</button></div>
           </form>
         ) : (
@@ -419,7 +419,7 @@ export default function FamilyPortal({ onClose, cats = [], onManageCats = () => 
                         <FamilyMemberAvatar name={memberName || member.email} photoUrl={member.avatar_url || ownPhoto} />
                         <span className="family-member-identity"><strong>{memberName}</strong><small>{member.email}</small><small className="family-member-status">{member.user_id ? "Joined" : "Added"}</small></span>
                         <button aria-label={`Edit name for ${memberName}`} className="family-edit-name-button" disabled={busy} onClick={() => { setEditingMemberId(member.id); setMemberNameDraft(memberName); }} type="button"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="m10.9 2.1 3 3L6 13H3v-3l7.9-7.9Z" /><path d="m9.7 3.3 3 3" /></svg></button>
-                        {member.user_id !== session.user.id && <button aria-label={`Remove ${memberName} from family`} className="family-remove-button" disabled={busy} onClick={() => void removePerson(member)} type="button">Remove</button>}
+                        {member.user_id !== session.user.id && <button aria-label={`Remove ${memberName} from family`} className="family-remove-button" disabled={busy} onClick={() => void removePerson(member)} title="Remove from family" type="button"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M8 12h8" /></svg></button>}
                       </li>
                     );
                   })}
@@ -452,7 +452,7 @@ export default function FamilyPortal({ onClose, cats = [], onManageCats = () => 
             <span className="modal-icon">⌂</span>
             <h2 id="edit-family-name-title">Edit family name</h2>
             <p>This name is shared with everyone in your family.</p>
-            <label>Family name<input autoFocus maxLength={80} onChange={(event) => setFamilyNameDraft(event.target.value)} required value={familyNameDraft} /></label>
+            <label>Family name<input maxLength={80} onChange={(event) => setFamilyNameDraft(event.target.value)} required value={familyNameDraft} /></label>
             <div className="modal-actions">
               <button disabled={busy || closingEditDialog} onClick={() => closeEditDialog(() => setEditingFamilyName(false))} type="button">Cancel</button>
               <button disabled={busy || closingEditDialog || !familyNameDraft.trim()} type="submit">{busy ? "Saving…" : "Save"}</button>
@@ -464,7 +464,7 @@ export default function FamilyPortal({ onClose, cats = [], onManageCats = () => 
             <span className="modal-icon">✎</span>
             <h2 id="edit-member-name-title">Edit family member name</h2>
             <p>This name appears to everyone in your family.</p>
-            <label>Name<input autoFocus maxLength={60} onChange={(event) => setMemberNameDraft(event.target.value)} required value={memberNameDraft} /></label>
+            <label>Name<input maxLength={60} onChange={(event) => setMemberNameDraft(event.target.value)} required value={memberNameDraft} /></label>
             <div className="modal-actions">
               <button disabled={busy || closingEditDialog} onClick={() => closeEditDialog(() => setEditingMemberId(null))} type="button">Cancel</button>
               <button disabled={busy || closingEditDialog || !memberNameDraft.trim()} type="submit">{busy ? "Saving…" : "Save"}</button>

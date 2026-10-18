@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState } from "react";
-import type { ChangeEvent } from "react";
+import { useState } from "react";
 import "./CatsOverview.css";
 
 export type OverviewCat = { id: number | string; name: string; color: string; initial: string; photo?: string };
@@ -14,49 +13,14 @@ type Props = {
   selectedId: number | string;
   onSelect: (id: number | string) => void;
   onAdd: () => void;
-  onPhoto: (id: number | string, file?: File) => void;
-  onRename: (cat: OverviewCat, name: string) => Promise<void>;
+  onEdit: (id: number | string) => void;
   onRemove: (cat: OverviewCat) => Promise<void>;
 };
 
 function progress(value: number, goal: number) { return Math.min(100, Math.round((value / Math.max(goal, 1)) * 100)); }
 
-export default function CatsOverview({ cats, summaries, familyName, onManageFamily = () => {}, error, selectedId, onSelect, onAdd, onPhoto, onRename, onRemove }: Props) {
-  const [editingId, setEditingId] = useState<number | string | null>(null);
-  const [draft, setDraft] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [closingEditor, setClosingEditor] = useState(false);
-  const closeTimer = useRef<number | undefined>(undefined);
+export default function CatsOverview({ cats, summaries, familyName, onManageFamily = () => {}, error, selectedId, onSelect, onAdd, onEdit, onRemove }: Props) {
   const [feedback, setFeedback] = useState("");
-
-  useEffect(() => () => { if (closeTimer.current !== undefined) window.clearTimeout(closeTimer.current); }, []);
-
-  function closeEditor() {
-    if (saving || closingEditor) return;
-    setClosingEditor(true);
-    closeTimer.current = window.setTimeout(() => {
-      setEditingId(null);
-      setClosingEditor(false);
-    }, 180);
-  }
-
-  async function saveName(cat: OverviewCat) {
-    if (!draft.trim()) return;
-    setSaving(true);
-    try {
-      await onRename(cat, draft.trim());
-      setFeedback("");
-      setClosingEditor(true);
-      closeTimer.current = window.setTimeout(() => { setEditingId(null); setClosingEditor(false); }, 180);
-    }
-    catch (cause) { setFeedback(cause instanceof Error ? cause.message : "Could not update this cat’s name."); }
-    finally { setSaving(false); }
-  }
-
-  function photoChanged(cat: OverviewCat, event: ChangeEvent<HTMLInputElement>) {
-    onPhoto(cat.id, event.target.files?.[0]);
-    event.target.value = "";
-  }
 
   return <main className="cats-page" aria-labelledby="cats-page-title">
     <header className="cats-page-header">
@@ -67,9 +31,9 @@ export default function CatsOverview({ cats, summaries, familyName, onManageFami
     {cats.length ? <div className="cats-overview-grid">{cats.map((cat) => {
       const summary = summaries[String(cat.id)];
       const values = summary ? [
-        ["Treats", summary.treats, summary.treatsGoal],
-        ["Kibble", summary.kibble, summary.kibbleGoal],
-        ["Wet food", summary.cans, summary.cansGoal],
+        ["Treats", summary.treats, summary.treatsGoal, "treats"],
+        ["Kibble", summary.kibble, summary.kibbleGoal, "kibble"],
+        ["Wet food", summary.cans, summary.cansGoal, "wet"],
       ] as const : [];
       return <article
         aria-label={`${cat.name} cat care summary`}
@@ -87,34 +51,17 @@ export default function CatsOverview({ cats, summaries, familyName, onManageFami
         </div>
         {summary ? <div className="cat-summary-care">
           <h3>Today’s care</h3>
-          {values.map(([label, value, goal]) => {
+          {values.map(([label, value, goal, food]) => {
             const icon = label === "Treats" ? "🍪" : label === "Kibble" ? "🥣" : "🍽️";
-            return <div className="cat-summary-metric" key={label}><div><span><i aria-hidden="true">{icon}</i>{label}</span><strong>{value} / {goal}</strong></div><span className="cat-summary-progress"><i style={{ width: `${progress(value, goal)}%` }} /></span></div>;
+            return <div className={`cat-summary-metric food-${food}`} key={label}><div><span><i aria-hidden="true">{icon}</i>{label}</span><strong>{value} / {goal}</strong></div><span className="cat-summary-progress"><i style={{ width: `${progress(value, goal)}%` }} /></span></div>;
           })}
           <div className="cat-summary-extras"><span><i aria-hidden="true">🧶</i> Play <strong>{summary.played}</strong></span><span><i aria-hidden="true">🧼</i> Ears <strong>{summary.ears ? "Done this week" : "Due this week"}</strong></span></div>
         </div> : <p className="cat-summary-no-data">Care summary will appear here.</p>}
         <div className="cat-summary-actions" onClick={(event) => event.stopPropagation()}>
-          <label className="cat-summary-action">{cat.photo ? "Change photo" : "Add photo"}<input accept="image/*,.heic,.heif" onChange={(event) => photoChanged(cat, event)} type="file" /></label>
-          <button className="cat-summary-action" onClick={() => { setDraft(cat.name); setEditingId(cat.id); }} type="button">Edit name</button>
-          <button className="cat-summary-action is-danger" onClick={() => void onRemove(cat)} type="button">Remove cat</button>
+          <button aria-label="Edit cat" className="cat-summary-action" onClick={() => onEdit(cat.id)} type="button"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m14.5 5.5 4 4M4 20l4.2-.9L19 7.3 16.7 5 5.9 15.8 4 20Z" /></svg><span>Edit cat</span></button>
+          <button aria-label="Remove cat" className="cat-summary-action is-danger" onClick={() => void onRemove(cat)} type="button"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M8 12h8" /></svg><span>Remove cat</span></button>
         </div>
       </article>;
     })}</div> : <div className="cats-empty"><span aria-hidden="true">🐾</span>{familyName ? <><h2>No cats yet</h2><p>Add your family’s first cat to start tracking their care.</p><button className="cats-add-button" onClick={onAdd} type="button">＋ Add a cat</button></> : <><h2>Your cats start with family</h2><p>Create a family or ask someone to add your Google account. Then add your cats and share their care with everyone.</p><div className="cats-onboarding-actions"><button className="cats-add-button" onClick={onManageFamily} type="button">Create a family</button><button className="cats-family-link" onClick={onManageFamily} type="button">I was invited to a family</button></div></>}</div>}
-    {editingId !== null && (() => {
-      const cat = cats.find((entry) => entry.id === editingId);
-      if (!cat) return null;
-      return <div className={`modal-backdrop${closingEditor ? " is-closing" : ""}`} onMouseDown={(event) => { if (event.target === event.currentTarget) closeEditor(); }}>
-        <form aria-labelledby="edit-cat-name-title" className={`modal${closingEditor ? " is-closing" : ""}`} onClick={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); void saveName(cat); }} role="dialog" aria-modal="true">
-          <span className="modal-icon">🐾</span>
-          <h2 id="edit-cat-name-title">Edit {cat.name}’s name</h2>
-          <p>Everyone in your family will see this name.</p>
-          <label>Cat name<input aria-label={`Name for ${cat.name}`} autoFocus maxLength={60} onChange={(event) => setDraft(event.target.value)} required value={draft} /></label>
-          <div className="modal-actions">
-            <button disabled={saving || closingEditor} onClick={closeEditor} type="button">Cancel</button>
-            <button disabled={saving || closingEditor || !draft.trim()} type="submit">{saving ? "Saving…" : "Save"}</button>
-          </div>
-        </form>
-      </div>;
-    })()}
   </main>;
 }

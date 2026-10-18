@@ -90,27 +90,51 @@ describe("tracking and family navigation", () => {
     expect(within(dialog).getAllByRole("button")).toHaveLength(10);
     await user.click(within(dialog).getByRole("button", { name: /Play/ }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByRole("button", { name: "Add one session" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Tap to add one" })).not.toBeNull();
+    expect(screen.getByRole("group", { name: "Playtime tracker" })).not.toBeNull();
   });
 
-  it("switches tracking modes in either direction, wraps around, and never records a swipe as a tap", () => {
+  it("places poop and pee at the lower-right of the menu and tracks them as unmetered counters", async () => {
+    localStorage.setItem("purrfect-trackers", JSON.stringify({ "1": { pooped: true, peed: false } }));
+    const user = userEvent.setup();
     const { container } = renderApp();
-    const tapCard = screen.getByRole("button", { name: "Add one treats" });
+    await user.click(screen.getByRole("button", { name: "Care Menu" }));
+    const tiles = Array.from(container.querySelectorAll(".mobile-item-grid button"));
+    expect(tiles.slice(-2).map((tile) => tile.textContent?.trim())).toEqual(["Poop", "Pee"]);
+
+    await user.click(screen.getByRole("button", { name: "Poop" }));
+    expect(screen.getByRole("group", { name: "Pooped today tracker" })).not.toBeNull();
+    expect(container.querySelector(".big-tap-card .big-count")?.textContent).toContain("1");
+    expect(container.querySelector(".big-tap-card .big-goal-progress")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Tap to add one" }));
+    expect(container.querySelector(".big-tap-card .big-count")?.textContent).toContain("2");
+    expect(screen.getByRole("button", { name: /Who saw\?/ }).querySelector("span")?.textContent).toBe("2");
+  });
+
+  it("switches tracking modes in either direction, wraps around, and never records a swipe as a tap", async () => {
+    const { container } = renderApp();
+    const tapCard = screen.getByRole("group", { name: "Dental treats tracker" });
     const tapArea = container.querySelector(".big-tap-wrap")!;
     const swipe = (fromX: number, toX: number) => {
       fireEvent.pointerDown(tapArea, { pointerType: "touch", clientX: fromX, clientY: 120 });
       fireEvent.pointerUp(tapArea, { pointerType: "touch", clientX: toX, clientY: 124 });
     };
     swipe(220, 130);
-    expect(screen.getByRole("button", { name: "Add one spoons" })).not.toBeNull();
+    expect(screen.getByRole("group", { name: "Spoons of kibble tracker" })).not.toBeNull();
     expect(container.querySelector(".big-tap-card")?.classList.contains("mode-swipe-next")).toBe(true);
     swipe(130, 220);
-    expect(screen.getByRole("button", { name: "Add one treats" })).not.toBeNull();
+    expect(screen.getByRole("group", { name: "Dental treats tracker" })).not.toBeNull();
     expect(container.querySelector(".big-tap-card")?.classList.contains("mode-swipe-previous")).toBe(true);
     swipe(130, 220);
-    expect(screen.getByRole("button", { name: "Add one session" })).not.toBeNull();
+    expect(screen.getByRole("group", { name: "Peed today tracker" })).not.toBeNull();
     expect(localStorage.getItem("purrfect-care-logs")).toBe("[]");
     expect(tapCard).toBeTruthy();
+    const peeCard = screen.getByRole("group", { name: "Peed today tracker" });
+    fireEvent.click(peeCard);
+    expect(localStorage.getItem("purrfect-care-logs")).toBe("[]");
+    await new Promise((resolve) => window.setTimeout(resolve, 380));
+    fireEvent.click(screen.getByRole("button", { name: "Tap to add one" }));
+    expect(JSON.parse(localStorage.getItem("purrfect-care-logs") ?? "[]")).toHaveLength(1);
   });
 
   it("starts with no demo cats and offers family setup or an invitation path", async () => {
@@ -167,20 +191,80 @@ describe("tracking and family navigation", () => {
     expect(screen.getByRole("button", { name: "Track care for Miso" })).not.toBeNull();
   });
 
-  it("opens the same zoom and crop editor when changing an existing cat photo", async () => {
+  it("locks the add-cat form while the photo crop request is running", async () => {
+    const user = userEvent.setup();
+    let finishCrop: ((value: string) => void) | undefined;
+    photoMocks.cropCatPhoto.mockClear();
+    photoMocks.cropCatPhoto.mockImplementationOnce(() => new Promise((resolve) => { finishCrop = resolve; }));
+    renderApp();
+    await user.click(screen.getAllByRole("button", { name: "Add a cat" })[0]);
+    await user.type(screen.getByRole("textbox", { name: "Cat’s name" }), "Miso");
+    await user.upload(screen.getByLabelText("Choose file!"), new File(["photo"], "miso.png", { type: "image/png" }));
+    const addCatDialog = screen.getByRole("dialog", { name: "Add a new cat" });
+    act(() => {
+      fireEvent.submit(addCatDialog);
+      fireEvent.submit(addCatDialog);
+    });
+
+    const busyButton = await screen.findByRole("button", { name: /Adding/ });
+    expect(busyButton.hasAttribute("disabled")).toBe(true);
+    expect(photoMocks.cropCatPhoto).toHaveBeenCalledTimes(1);
+    fireEvent.click(busyButton);
+    expect(screen.queryByRole("button", { name: "Track care for Miso" })).toBeNull();
+
+    finishCrop?.("data:image/jpeg;base64,cropped");
+    expect(await screen.findByRole("button", { name: "Track care for Miso" })).not.toBeNull();
+  });
+
+  it("closes a cat profile modal when switching pages", async () => {
     const user = userEvent.setup();
     renderApp();
     await user.click(screen.getByRole("button", { name: "Cats" }));
-    const photoInput = screen.getAllByText("Add photo")[0].closest("label")?.querySelector("input")!;
+    await user.click(screen.getAllByRole("button", { name: "Edit cat" })[0]);
+    expect(screen.getByRole("dialog", { name: "Edit Mochi" })).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "Care" }));
+    expect(screen.queryByRole("dialog", { name: "Edit Mochi" })).toBeNull();
+  });
+
+  it("opens the cat profile editor with zoom and crop when changing an existing photo", async () => {
+    const user = userEvent.setup();
+    renderApp();
+    await user.click(screen.getByRole("button", { name: "Cats" }));
+    await user.click(screen.getAllByRole("button", { name: "Edit cat" })[0]);
+    const photoInput = screen.getByLabelText("Choose profile photo");
     await user.upload(photoInput, new File(["photo"], "mochi.png", { type: "image/png" }));
 
-    expect(await screen.findByRole("dialog", { name: "Change Mochi’s photo" })).not.toBeNull();
+    expect(await screen.findByRole("dialog", { name: "Edit Mochi" })).not.toBeNull();
     fireEvent.change(screen.getByRole("slider", { name: "Zoom photo" }), { target: { value: "2" } });
     fireEvent.change(screen.getByRole("slider", { name: "Horizontal photo crop" }), { target: { value: "70" } });
-    await user.click(screen.getByRole("button", { name: "Save photo" }));
+    await user.click(screen.getByRole("button", { name: "Save profile" }));
 
     expect(photoMocks.cropCatPhoto).toHaveBeenCalledWith("data:image/jpeg;base64,preview", { x: 70, y: 50, zoom: 2 });
     expect(screen.getAllByAltText("Mochi").every((image) => image.getAttribute("src") === "data:image/jpeg;base64,cropped")).toBe(true);
+  });
+
+  it("saves the cat name and food goals from the cat profile dialog", async () => {
+    const user = userEvent.setup();
+    renderApp();
+    await user.click(screen.getByRole("button", { name: "Cats" }));
+    await user.click(screen.getAllByRole("button", { name: "Edit cat" })[0]);
+    await user.clear(screen.getByRole("textbox", { name: "Cat’s name" }));
+    await user.type(screen.getByRole("textbox", { name: "Cat’s name" }), "Miso");
+    await user.clear(screen.getByRole("spinbutton", { name: "Dental treats goal" }));
+    await user.type(screen.getByRole("spinbutton", { name: "Dental treats goal" }), "6");
+    await user.click(screen.getByRole("button", { name: "Save profile" }));
+
+    expect((await screen.findAllByRole("heading", { name: "Miso" })).length).toBeGreaterThan(0);
+    expect(JSON.parse(localStorage.getItem("purrfect-trackers") ?? "{}")["1"].treatsGoal).toBe(6);
+  });
+
+  it("warns when food goals are met and play becomes excessive", async () => {
+    localStorage.setItem("purrfect-trackers", JSON.stringify({ "1": { treats: 4, treatsGoal: 4, played: 5 } }));
+    const user = userEvent.setup();
+    renderApp();
+    expect(screen.getByRole("status").textContent).toMatch(/reached.*treats goal/i);
+    await chooseTrackingMode(user, /Play/);
+    expect(screen.getByRole("status").textContent).toMatch(/lot of play sessions/i);
   });
 
   it("cancels out added care entries that were undone from the visible activity", async () => {
@@ -250,7 +334,7 @@ describe("care tracking corrections", () => {
     const counter = container.querySelector(".big-tap-card .big-count");
     expect(counter?.textContent).toContain("9");
 
-    await user.click(screen.getByRole("button", { name: "Add one treats" }));
+    await user.click(screen.getByRole("button", { name: "Tap to add one" }));
     expect(container.querySelector(".big-tap-card .big-count")?.textContent).toContain("10");
     expect(container.querySelector(".big-tap-card .big-count")).toBe(counter);
 
@@ -266,7 +350,7 @@ describe("care tracking corrections", () => {
     const user = userEvent.setup();
     const { container } = renderApp();
     await chooseTrackingMode(user, /Treats/);
-    const tapButton = screen.getByRole("button", { name: "Add one treats" });
+    const tapButton = screen.getByRole("button", { name: "Tap to add one" });
 
     act(() => {
       for (let tap = 0; tap < 10; tap += 1) fireEvent.click(tapButton);
@@ -287,16 +371,16 @@ describe("care tracking corrections", () => {
     const { container } = renderApp();
     const counter = container.querySelector(".big-tap-card .big-count");
     await chooseTrackingMode(user, /Treats/);
-    await user.click(screen.getByRole("button", { name: "Add one treats" }));
+    await user.click(screen.getByRole("button", { name: "Tap to add one" }));
     expect(counter?.textContent).toContain("1");
     expect(counter?.textContent).toContain("/ 4");
-    const undoButton = screen.getByRole("button", { name: "Undo last +1" });
+    const undoButton = within(container.querySelector(".big-tap-wrap")!).getByRole("button", { name: /Undo recent care action/ });
     expect(undoButton.classList.contains("tap-undo-icon")).toBe(true);
     expect(undoButton.closest(".big-tap-wrap")).not.toBeNull();
-    expect(undoButton.textContent).toBe("");
+    expect(undoButton.textContent).toBe("1");
     expect(screen.getByRole("button", { name: /Who fed\?/ }).querySelector("span")?.textContent).toBe("1");
 
-    await user.click(screen.getByRole("button", { name: "Undo last +1" }));
+    await user.click(within(container.querySelector(".big-tap-wrap")!).getByRole("button", { name: /Undo recent care action/ }));
     expect(counter?.textContent).toContain("0");
     expect(counter?.textContent).toContain("/ 4");
     expect(container.querySelector(".big-tap-card .big-count")).toBe(counter);
@@ -307,14 +391,31 @@ describe("care tracking corrections", () => {
     });
   });
 
+  it("keeps multiple actions undoable in reverse order after the latest tap", async () => {
+    const user = userEvent.setup();
+    const { container } = renderApp();
+    await chooseTrackingMode(user, /Treats/);
+    const tapButton = screen.getByRole("button", { name: "Tap to add one" });
+    await user.click(tapButton);
+    await user.click(tapButton);
+    expect(container.querySelector(".big-tap-card .big-count")?.textContent).toContain("2");
+    expect(within(container.querySelector(".big-tap-wrap")!).getByRole("button", { name: /Undo recent care action, 2 available/ })).not.toBeNull();
+
+    await user.click(within(container.querySelector(".big-tap-wrap")!).getByRole("button", { name: /Undo recent care action/ }));
+    expect(container.querySelector(".big-tap-card .big-count")?.textContent).toContain("1");
+    expect(within(container.querySelector(".big-tap-wrap")!).getByRole("button", { name: /Undo recent care action, 1 available/ })).not.toBeNull();
+    await user.click(within(container.querySelector(".big-tap-wrap")!).getByRole("button", { name: /Undo recent care action/ }));
+    expect(container.querySelector(".big-tap-card .big-count")?.textContent).toContain("0");
+  });
+
   it("undoes a wet-food 10% check-in and restores partial progress", async () => {
     const user = userEvent.setup();
     const { container } = renderApp();
     await chooseTrackingMode(user, /Wet food/);
-    await user.click(screen.getByRole("button", { name: "Add one cans" }));
+    await user.click(screen.getByRole("button", { name: "Tap to add 10%" }));
     expect(screen.getByText("10% of the next can")).not.toBeNull();
 
-    await user.click(screen.getByRole("button", { name: "Undo last wet food tap" }));
+    await user.click(within(container.querySelector(".big-tap-wrap")!).getByRole("button", { name: /Undo recent care action/ }));
     expect(screen.getByText("0% of the next can")).not.toBeNull();
   });
 
@@ -323,13 +424,13 @@ describe("care tracking corrections", () => {
     const { container } = renderApp();
     await chooseTrackingMode(user, /Wet food/);
     for (let tap = 0; tap < 9; tap += 1) {
-      await user.click(screen.getByRole("button", { name: "Add one cans" }));
+      await user.click(screen.getByRole("button", { name: "Tap to add 10%" }));
     }
     expect(screen.getByText("90% of the next can")).not.toBeNull();
 
-    await user.click(screen.getByRole("button", { name: "Add one cans" }));
+    await user.click(screen.getByRole("button", { name: "Tap to add 10%" }));
     expect(container.querySelector(".wet-food-count strong")?.textContent).toContain("1 can");
-    await user.click(screen.getByRole("button", { name: "Undo last wet food tap" }));
+    await user.click(within(container.querySelector(".big-tap-wrap")!).getByRole("button", { name: /Undo recent care action/ }));
     expect(container.querySelector(".wet-food-count strong")?.textContent).toContain("0 cans");
     expect(screen.getByText("90% of the next can")).not.toBeNull();
   });
@@ -338,12 +439,12 @@ describe("care tracking corrections", () => {
     const user = userEvent.setup();
     const { container } = renderApp();
     await chooseTrackingMode(user, /Wet food/);
-    for (let tap = 0; tap < 5; tap += 1) await user.click(screen.getByRole("button", { name: "Add one cans" }));
+    for (let tap = 0; tap < 5; tap += 1) await user.click(screen.getByRole("button", { name: "Tap to add 10%" }));
 
     const whoFedButton = screen.getByRole("button", { name: /Who fed\?/ });
     expect(whoFedButton.querySelector("span")?.textContent).toBe("0.5");
 
-    for (let tap = 0; tap < 5; tap += 1) await user.click(screen.getByRole("button", { name: "Add one cans" }));
+    for (let tap = 0; tap < 5; tap += 1) await user.click(screen.getByRole("button", { name: "Tap to add 10%" }));
     expect(whoFedButton.querySelector("span")?.textContent).toBe("1");
     await user.click(whoFedButton);
     expect(container.querySelector(".record-card-heading > span")?.textContent).toBe("1");

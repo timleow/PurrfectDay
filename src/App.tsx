@@ -32,11 +32,13 @@ import { isSupabaseConfigured, supabase } from "./data/supabase";
 
 type IconName =
   | "bowl"
+  | "bell"
   | "calendar"
   | "check"
   | "chevron"
   | "drop"
   | "ear"
+  | "edit"
   | "family"
   | "heart"
   | "medical"
@@ -47,6 +49,7 @@ type IconName =
   | "play"
   | "poop"
   | "pee"
+  | "removePerson"
   | "plus"
   | "settings"
   | "sparkle"
@@ -73,8 +76,8 @@ type Tracker = {
   cansGoal: number;
   teethPawing: number;
   fountain: boolean;
-  pooped: boolean;
-  peed: boolean;
+  pooped: number;
+  peed: number;
   ears: boolean;
   played: number;
   earsWeek: string;
@@ -114,7 +117,7 @@ type PendingCareAction = {
 };
 
 type FoodGoalKey = "treatsGoal" | "kibbleGoal" | "cansGoal";
-type UndoAction = { catId: number | string; metric: TrackableKey; amountDelta: number; actorUserId?: string };
+type UndoAction = { id: string; catId: number | string; metric: TrackableKey; amountDelta: number; actorUserId?: string; timestamp: number };
 
 const metricLabels: Record<TrackableKey, string> = {
   treats: "Dental treats",
@@ -194,8 +197,8 @@ function trackerFromCloud(catId: string, events: CareEvent[], targets: TargetRul
     cansGoal: goal("wet_food", "daily", 1),
     teethPawing: Math.max(0, sum("teeth_pawing", dayStart, tomorrow)),
     fountain: sum("fountain", dayStart, tomorrow) > 0,
-    pooped: sum("poop", dayStart, tomorrow) > 0,
-    peed: sum("pee", dayStart, tomorrow) > 0,
+    pooped: Math.max(0, sum("poop", dayStart, tomorrow)),
+    peed: Math.max(0, sum("pee", dayStart, tomorrow)),
     ears: sum("ear_cleaning", weekStart, tomorrow) > 0,
     earsWeek: sum("ear_cleaning", weekStart, tomorrow) > 0 ? window.weekStart : "",
     played: Math.max(0, sum("play", dayStart, tomorrow)),
@@ -228,7 +231,7 @@ function applyCareAction(tracker: Tracker, metric: TrackableKey, amountDelta: nu
     const cans = Math.floor(amount + 0.000001);
     return { ...tracker, cans, canProgress: Math.round((amount - cans) * 100) };
   }
-  if (metric === "fountain" || metric === "pooped" || metric === "peed" || metric === "ears") {
+  if (metric === "fountain" || metric === "ears") {
     return { ...tracker, [metric]: amountDelta > 0 };
   }
   return { ...tracker, [metric]: Math.max(0, Number(tracker[metric]) + amountDelta) };
@@ -343,6 +346,8 @@ const metricUnits: Partial<Record<TrackableKey, string>> = {
   kibble: "spoons",
   cans: "cans",
   teethPawing: "times",
+  pooped: "times",
+  peed: "times",
   played: "sessions",
 };
 
@@ -368,8 +373,8 @@ const emptyTracker: Tracker = {
   cansGoal: 1,
   teethPawing: 0,
   fountain: false,
-  pooped: false,
-  peed: false,
+  pooped: 0,
+  peed: 0,
   ears: false,
   played: 0,
   earsWeek: "",
@@ -383,7 +388,7 @@ function getLocalWeekKey(date = new Date()) {
 
 function loadTrackers(saved: string | null): Record<string, Tracker> {
   if (!saved) return { 1: { ...emptyTracker } };
-  const parsed = JSON.parse(saved) as Record<string, Partial<Tracker> & { played?: number | boolean }>;
+  const parsed = JSON.parse(saved) as Record<string, Partial<Tracker> & { played?: number | boolean; pooped?: number | boolean; peed?: number | boolean }>;
   return Object.fromEntries(
     Object.entries(parsed).map(([id, tracker]) => [
       Number(id),
@@ -391,6 +396,8 @@ function loadTrackers(saved: string | null): Record<string, Tracker> {
         ...emptyTracker,
         ...tracker,
         played: typeof tracker.played === "number" ? tracker.played : tracker.played ? 1 : 0,
+        pooped: typeof tracker.pooped === "number" ? tracker.pooped : tracker.pooped ? 1 : 0,
+        peed: typeof tracker.peed === "number" ? tracker.peed : tracker.peed ? 1 : 0,
         earsWeek: tracker.earsWeek ?? (tracker.ears ? getLocalWeekKey() : ""),
       },
     ]),
@@ -399,6 +406,7 @@ function loadTrackers(saved: string | null): Record<string, Tracker> {
 
 function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, React.ReactNode> = {
+    bell: <><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21h4" /></>,
     bowl: (
       <>
         <path d="M4 10h16c-.45 5.4-3.1 8-8 8s-7.55-2.6-8-8Z" />
@@ -420,6 +428,7 @@ function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
         <path d="M9 8.3c1.5-1.5 4.5-1.4 5.4.6.8 1.7-1.2 2.5-2.3 3.2" />
       </>
     ),
+    edit: <><path d="m14.5 5.5 4 4M4 20l4.2-.9L19 7.3 16.7 5 5.9 15.8 4 20Z" /><path d="M13.8 6.2 17.8 10.2" /></>,
     family: (
       <>
         <circle cx="9" cy="8" r="3" />
@@ -452,6 +461,7 @@ function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
         <path d="M5.3 12.8s2.3 2.7 2.3 4.4a2.3 2.3 0 0 1-4.6 0c0-1.7 2.3-4.4 2.3-4.4ZM18.7 12.8s2.3 2.7 2.3 4.4a2.3 2.3 0 0 1-4.6 0c0-1.7 2.3-4.4 2.3-4.4Z" />
       </>
     ),
+    removePerson: <><circle cx="9" cy="8" r="3" /><path d="M3.5 20v-1.4a5.5 5.5 0 0 1 11 0V20M17 10h5" /></>,
     paw: (
       <>
         <ellipse cx="12" cy="15.5" rx="5.3" ry="4.2" />
@@ -775,23 +785,25 @@ function Stepper({
   onChange,
   accent,
   goal,
+  label,
 }: {
   value: number;
   onChange: (next: number) => void;
   accent: string;
   goal?: number;
+  label?: string;
 }) {
   return (
     <div className="stepper" style={{ "--accent": accent } as React.CSSProperties}>
       <button
-        aria-label="Decrease"
+        aria-label={label ? `Decrease ${label}` : "Decrease"}
         disabled={value === 0}
         onClick={() => onChange(Math.max(0, value - 1))}
       >
         <Icon name="minus" size={16} />
       </button>
-      <strong>{goal ? <>{value}<small>/{goal}</small></> : value}</strong>
-      <button aria-label="Increase" onClick={() => onChange(value + 1)}>
+      <strong aria-label={label ? `${label}: ${value}` : undefined}>{goal ? <>{value}<small>/{goal}</small></> : value}</strong>
+      <button aria-label={label ? `Increase ${label}` : "Increase"} onClick={() => onChange(value + 1)}>
         <Icon name="plus" size={16} />
       </button>
     </div>
@@ -876,16 +888,23 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<number | string>(cats[0]?.id ?? "");
   const [trackers, setTrackers] = useState<Record<string, Tracker>>(() => loadTrackers(localStorage.getItem("purrfect-trackers")));
   const [showAddCat, setShowAddCat] = useState(false);
+  const [addCatBusy, setAddCatBusy] = useState(false);
+  const addCatBusyRef = useRef(false);
   const [activeTab, setActiveTab] = useState<"care" | "cats" | "family">("care");
   const [showQuotas, setShowQuotas] = useState(false);
   const [goalDrafts, setGoalDrafts] = useState<Record<FoodGoalKey, string>>({ treatsGoal: "4", kibbleGoal: "3", cansGoal: "1" });
+  const [profileEditCatId, setProfileEditCatId] = useState<number | string | null>(null);
+  const [profileNameDraft, setProfileNameDraft] = useState("");
+  const [profilePhotoDraft, setProfilePhotoDraft] = useState<string | undefined>();
+  const [profilePhotoPosition, setProfilePhotoPosition] = useState({ x: 50, y: 50 });
+  const [profilePhotoZoom, setProfilePhotoZoom] = useState(1);
+  const [profilePhotoLoading, setProfilePhotoLoading] = useState(false);
+  const [profileGoalDrafts, setProfileGoalDrafts] = useState<Record<FoodGoalKey, string>>({ treatsGoal: "4", kibbleGoal: "3", cansGoal: "1" });
+  const [profileSaving, setProfileSaving] = useState(false);
   const [newCatName, setNewCatName] = useState("");
   const [newCatPhoto, setNewCatPhoto] = useState<string | undefined>();
   const [newCatPhotoPosition, setNewCatPhotoPosition] = useState({ x: 50, y: 50 });
   const [newCatPhotoZoom, setNewCatPhotoZoom] = useState(1);
-  const [photoEditCatId, setPhotoEditCatId] = useState<number | string | null>(null);
-  const [photoEditDraft, setPhotoEditDraft] = useState<string | undefined>();
-  const [photoEditSaving, setPhotoEditSaving] = useState(false);
   const [pendingCatRemoval, setPendingCatRemoval] = useState<Cat | null>(null);
   const [catRemovalBusy, setCatRemovalBusy] = useState(false);
   const [photoError, setPhotoError] = useState("");
@@ -918,12 +937,64 @@ export default function App() {
     return trackableKeys.includes(savedMetric as TrackableKey) ? savedMetric as TrackableKey : "treats";
   });
   const [tapBurst, setTapBurst] = useState(0);
-  const [undoAction, setUndoAction] = useState<UndoAction | null>(null);
+  const [undoActions, setUndoActions] = useState<UndoAction[]>([]);
+  const [undoRevealUntil, setUndoRevealUntil] = useState(0);
+  const [undoNow, setUndoNow] = useState(() => Date.now());
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [notificationsSeenAt, setNotificationsSeenAt] = useState(() => Number(localStorage.getItem("purrfect-notifications-seen-at") || Date.now()));
+  const catSwipeStart = useRef<{ x: number; y: number } | null>(null);
+  const ignoreNextCatTap = useRef(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("purrfect-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    setShowAddCat(false);
+    setShowQuotas(false);
+    setProfileEditCatId(null);
+    setShowNotifications(false);
+    setShowTrackPicker(false);
+    setShowBreakdown(false);
+    setPendingCatRemoval(null);
+  }, [activeTab]);
+
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const updateViewport = () => {
+      document.documentElement.style.setProperty("--visual-viewport-height", `${viewport?.height ?? window.innerHeight}px`);
+    };
+    const keepFocusedFieldVisible = (event: FocusEvent) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement) || !target.closest(".modal")) return;
+      window.setTimeout(() => target.scrollIntoView?.({ block: "center", behavior: "smooth" }), 180);
+    };
+    updateViewport();
+    viewport?.addEventListener("resize", updateViewport);
+    viewport?.addEventListener("scroll", updateViewport);
+    document.addEventListener("focusin", keepFocusedFieldVisible);
+    return () => {
+      viewport?.removeEventListener("resize", updateViewport);
+      viewport?.removeEventListener("scroll", updateViewport);
+      document.removeEventListener("focusin", keepFocusedFieldVisible);
+      document.documentElement.style.removeProperty("--visual-viewport-height");
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!undoActions.length) return;
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      setUndoNow(now);
+      setUndoActions((current) => current.filter((entry) => now - entry.timestamp <= 15000));
+    }, 300);
+    return () => window.clearInterval(timer);
+  }, [undoActions.length]);
+
+  useEffect(() => {
+    localStorage.setItem("purrfect-notifications-seen-at", String(notificationsSeenAt));
+  }, [notificationsSeenAt]);
 
   const themeToggle = (
     <button
@@ -935,6 +1006,34 @@ export default function App() {
       <Icon name={theme === "dark" ? "sun" : "moon"} size={16} />
       <span>{theme === "dark" ? "Light mode" : "Dark mode"}</span>
     </button>
+  );
+
+  const notificationEntries = batchCareLogs(removeUndoneCareLogs(careLogs)
+    .filter((entry) => {
+      const delta = getCareLogDelta(entry);
+      return delta === undefined || delta > 0;
+    }))
+    .slice(0, 30);
+  const unreadNotificationCount = notificationEntries.filter((entry) => new Date(entry.timestamp).getTime() > notificationsSeenAt).length;
+  const notificationCenter = (
+    <div className="notification-center">
+      <button aria-expanded={showNotifications} aria-label="Care notifications" className="notification-trigger" onClick={() => {
+        const opening = !showNotifications;
+        setShowNotifications(opening);
+        if (opening) setNotificationsSeenAt(Date.now());
+      }} type="button">
+        <Icon name="bell" size={16} />
+        {unreadNotificationCount > 0 && <span className="notification-badge">{unreadNotificationCount > 9 ? "9+" : unreadNotificationCount}</span>}
+      </button>
+      {showNotifications && <section aria-label="Recent care activity" className="notification-popover" role="dialog">
+        <header><div><small>Family updates</small><h2>Recent care</h2></div><button aria-label="Close notifications" onClick={() => setShowNotifications(false)} type="button">×</button></header>
+        {notificationEntries.length ? <ol>{notificationEntries.slice(0, 12).map((entry) => {
+          const catName = cats.find((cat) => String(cat.id) === String(entry.catId))?.name ?? "Cat";
+          return <li key={entry.id}><button onClick={() => { setSelectedId(entry.catId); setActiveTab("care"); setShowNotifications(false); }} type="button"><span className={`notification-icon ${entry.metric ?? ""}`}><Icon name={metricIcons[entry.metric ?? "treats"]} size={15} /></span><span className="notification-copy"><strong>{entry.who} · {catName}</strong><small>{entry.detail}</small></span><time dateTime={entry.timestamp}>{new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(entry.timestamp))}</time></button></li>;
+        })}</ol> : <p className="notification-empty">Care check-ins from your family will show here.</p>}
+        {unreadNotificationCount > 0 && <footer>{unreadNotificationCount} new {unreadNotificationCount === 1 ? "update" : "updates"}</footer>}
+      </section>}
+    </div>
   );
 
   useEffect(() => {
@@ -1261,8 +1360,15 @@ export default function App() {
     ].slice(0, 500));
   };
 
+  const queueUndoAction = (catId: number | string, metric: TrackableKey, amountDelta: number) => {
+    const timestamp = Date.now();
+    const action: UndoAction = { id: crypto.randomUUID(), catId, metric, amountDelta, actorUserId: cloudSession?.user.id, timestamp };
+    setUndoActions((current) => [...current.filter((entry) => timestamp - entry.timestamp < 15000), action]);
+    setUndoRevealUntil(timestamp + 10000);
+    setUndoNow(timestamp);
+  };
+
   const update = (key: keyof Tracker, value: number | boolean) => {
-    setUndoAction(null);
     const targetMetric: Partial<Record<keyof Tracker, { metric: string; unit: string }>> = {
       treatsGoal: { metric: "treats", unit: "treats" },
       kibbleGoal: { metric: "kibble", unit: "spoons" },
@@ -1281,14 +1387,18 @@ export default function App() {
     if (key in metricLabels) {
       const metricKey = key as TrackableKey;
       const previous = key === "ears" ? tracker.ears : { ...emptyTracker, ...(trackers[selectedId] ?? {}) }[key];
+      let amountDelta = 0;
       if (typeof previous === "number" && typeof value === "number" && previous !== value) {
-        const difference = Math.abs(value - previous);
+        amountDelta = value - previous;
+        const difference = Math.abs(amountDelta);
         const unit = metricUnits[metricKey] ?? "";
         const displayUnit = difference === 1 ? unit.replace(/s$/, "") : unit;
-        addCareLog(metricKey, `${value > previous ? "Added" : "Removed"} ${difference}${displayUnit ? ` ${displayUnit}` : ""}`, (value > previous ? 1 : -1) * difference);
+        addCareLog(metricKey, `${amountDelta > 0 ? "Added" : "Removed"} ${difference}${displayUnit ? ` ${displayUnit}` : ""}`, amountDelta);
       } else if (typeof previous === "boolean" && typeof value === "boolean" && previous !== value) {
-        addCareLog(metricKey, value ? "Marked done" : "Undid this check-in", value ? 1 : -1);
+        amountDelta = value ? 1 : -1;
+        addCareLog(metricKey, value ? "Marked done" : "Undid this check-in", amountDelta);
       }
+      if (amountDelta !== 0) queueUndoAction(selectedId, metricKey, amountDelta);
     }
     setTrackers((current) => ({
       ...current,
@@ -1334,7 +1444,10 @@ export default function App() {
   const addCat = async (event: React.FormEvent) => {
     event.preventDefault();
     const name = newCatName.trim();
-    if (!name) return;
+    if (!name || addCatBusyRef.current) return;
+    addCatBusyRef.current = true;
+    setAddCatBusy(true);
+    try {
     const colors = ["#D494B7", "#79B8A9", "#E2AA55", "#9D90CB", "#EE8D75"];
     let croppedPhoto: string | undefined;
     if (newCatPhoto) {
@@ -1386,59 +1499,10 @@ export default function App() {
     setNewCatPhotoZoom(1);
     setPhotoError("");
     setShowAddCat(false);
-  };
-
-  const openCatPhotoEditor = async (file?: File, catId = selectedId) => {
-    if (!file) return;
-    try {
-      const photo = await readCatPhoto(file);
-      setPhotoEditCatId(catId);
-      setPhotoEditDraft(photo);
-      setNewCatPhotoPosition({ x: 50, y: 50 });
-      setNewCatPhotoZoom(1);
-      setPhotoError("");
-      setCloudError("");
-    } catch (cause) {
-      const message = errorMessage(cause, "Could not process this photo.");
-      setPhotoError(message);
-      if (cloudFamily) setCloudError(`Could not save the cat photo: ${message}`);
-    }
-  };
-
-  const saveCatPhotoEdit = async () => {
-    if (photoEditCatId === null || !photoEditDraft || photoEditSaving) return;
-    const catId = photoEditCatId;
-    setPhotoEditSaving(true);
-    try {
-      const croppedPhoto = await cropCatPhoto(photoEditDraft, { ...newCatPhotoPosition, zoom: newCatPhotoZoom });
-      if (cloudFamily && typeof catId === "string") {
-        if (cloudSession) clearWorkspaceCache(cloudSession.user.id);
-        const blob = await fetch(croppedPhoto).then((response) => response.blob());
-        const file = new File([blob], "cat-photo.jpg", { type: blob.type || "image/jpeg" });
-        const path = await uploadCatPhoto(cloudFamily.id, catId, file);
-        const photoUrl = await getCatPhotoUrl(path);
-        setCats((current) => current.map((cat) => cat.id === catId ? { ...cat, photo: photoUrl } : cat));
-      } else {
-        setCats((current) => current.map((cat) => cat.id === catId ? { ...cat, photo: croppedPhoto } : cat));
-      }
-      setPhotoEditCatId(null);
-      setPhotoEditDraft(undefined);
-      setPhotoError("");
-      setCloudError("");
-    } catch (cause) {
-      const message = errorMessage(cause, "Could not process this photo.");
-      setPhotoError(message);
-      if (cloudFamily) setCloudError(`Could not save the cat photo: ${message}`);
     } finally {
-      setPhotoEditSaving(false);
+      addCatBusyRef.current = false;
+      setAddCatBusy(false);
     }
-  };
-
-  const cancelCatPhotoEdit = () => {
-    if (photoEditSaving) return;
-    setPhotoEditCatId(null);
-    setPhotoEditDraft(undefined);
-    setPhotoError("");
   };
 
   const renameCat = async (cat: Cat, name: string) => {
@@ -1450,6 +1514,76 @@ export default function App() {
     } catch (cause) {
       setCloudError(errorMessage(cause, "Could not update the cat’s name."));
       throw cause;
+    }
+  };
+
+  const openCatProfile = (catId: number | string) => {
+    const cat = cats.find((entry) => String(entry.id) === String(catId));
+    if (!cat) return;
+    const current = { ...emptyTracker, ...(trackers[String(cat.id)] ?? {}) };
+    setProfileNameDraft(cat.name);
+    setProfilePhotoDraft(cat.photo);
+    setProfilePhotoPosition({ x: 50, y: 50 });
+    setProfilePhotoZoom(1);
+    setProfileGoalDrafts({ treatsGoal: String(current.treatsGoal), kibbleGoal: String(current.kibbleGoal), cansGoal: String(current.cansGoal) });
+    setPhotoError("");
+    setProfileEditCatId(cat.id);
+  };
+
+  const saveCatProfile = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const cat = cats.find((entry) => String(entry.id) === String(profileEditCatId));
+    const name = profileNameDraft.trim();
+    if (!cat || !name || profileSaving) return;
+    setProfileSaving(true);
+    setPhotoError("");
+    try {
+      if (name !== cat.name) await renameCat(cat, name);
+      let nextPhoto = profilePhotoDraft;
+      if (profilePhotoDraft && profilePhotoDraft !== cat.photo) {
+        const croppedPhoto = await cropCatPhoto(profilePhotoDraft, { ...profilePhotoPosition, zoom: profilePhotoZoom });
+        if (cloudFamily && typeof cat.id === "string") {
+          if (cloudSession) clearWorkspaceCache(cloudSession.user.id);
+          const blob = await fetch(croppedPhoto).then((response) => response.blob());
+          const file = new File([blob], `${name}-photo.jpg`, { type: blob.type || "image/jpeg" });
+          const path = await uploadCatPhoto(cloudFamily.id, cat.id, file);
+          nextPhoto = await getCatPhotoUrl(path);
+        } else {
+          nextPhoto = croppedPhoto;
+        }
+      } else if (!profilePhotoDraft && cat.photo && cloudFamily && typeof cat.id === "string") {
+        if (cloudSession) clearWorkspaceCache(cloudSession.user.id);
+        await updateCloudCat(cat.id, { photo_path: null });
+        nextPhoto = undefined;
+      }
+
+      const nextGoals = {
+        treatsGoal: Math.max(1, Number(profileGoalDrafts.treatsGoal) || 1),
+        kibbleGoal: Math.max(1, Number(profileGoalDrafts.kibbleGoal) || 1),
+        cansGoal: Math.max(1, Number(profileGoalDrafts.cansGoal) || 1),
+      };
+      const previous = { ...emptyTracker, ...(trackers[String(cat.id)] ?? {}) };
+      if (cloudFamily && typeof cat.id === "string") {
+        if (cloudSession) clearWorkspaceCache(cloudSession.user.id);
+        const changes: Array<[FoodGoalKey, string, string]> = [
+          ["treatsGoal", "treats", "treats"],
+          ["kibbleGoal", "kibble", "spoons"],
+          ["cansGoal", "wet_food", "cans"],
+        ];
+        await Promise.all(changes.filter(([key]) => nextGoals[key] !== previous[key]).map(([, metric, unit]) => saveTarget(
+          cloudFamily.id, cat.id as string, metric, "daily", nextGoals[metric === "treats" ? "treatsGoal" : metric === "kibble" ? "kibbleGoal" : "cansGoal"], unit, getFamilyCareWindow(cloudFamily.timezone).today,
+        )));
+      }
+      setCats((current) => current.map((entry) => entry.id === cat.id ? { ...entry, name, initial: name[0]?.toUpperCase() ?? "?", photo: nextPhoto } : entry));
+      setTrackers((current) => ({ ...current, [String(cat.id)]: { ...emptyTracker, ...(current[String(cat.id)] ?? {}), ...nextGoals } }));
+      setCloudError("");
+      setProfileEditCatId(null);
+    } catch (cause) {
+      const message = errorMessage(cause, "Could not save this cat profile.");
+      setPhotoError(message);
+      if (cloudFamily) setCloudError(message);
+    } finally {
+      setProfileSaving(false);
     }
   };
 
@@ -1493,15 +1627,15 @@ export default function App() {
     goal?: keyof Tracker;
     unit?: string;
   }> = [
-    { key: "treats", label: "Dental treats", shortLabel: "Treats", icon: "treat", color: "sunny", goal: "treatsGoal", unit: "treats" },
-    { key: "kibble", label: "Spoons of kibble", shortLabel: "Kibble", icon: "bowl", color: "sky", goal: "kibbleGoal", unit: "spoons" },
-    { key: "cans", label: "Cans of wet food", shortLabel: "Wet food", icon: "medical", color: "mint", goal: "cansGoal", unit: "cans" },
+    { key: "treats", label: "Dental treats", shortLabel: "Treats", icon: "treat", color: "treat-green", goal: "treatsGoal", unit: "treats" },
+    { key: "kibble", label: "Spoons of kibble", shortLabel: "Kibble", icon: "bowl", color: "kibble-brown", goal: "kibbleGoal", unit: "spoons" },
+    { key: "cans", label: "Cans of wet food", shortLabel: "Wet food", icon: "medical", color: "wet-beige", goal: "cansGoal", unit: "cans" },
     { key: "fountain", label: "Fountain top-up", shortLabel: "Water", icon: "drop", color: "aqua" },
     { key: "teethPawing", label: "Pawing at teeth", shortLabel: "Teeth", icon: "paw", color: "berry", unit: "times" },
-    { key: "pooped", label: "Pooped today", shortLabel: "Poop", icon: "poop", color: "lilac" },
-    { key: "peed", label: "Peed today", shortLabel: "Pee", icon: "pee", color: "blueberry" },
     { key: "ears", label: "Ears cleaned", shortLabel: "Ears", icon: "ear", color: "peachy" },
     { key: "played", label: "Playtime", shortLabel: "Play", icon: "yarn", color: "purple", unit: "session" },
+    { key: "pooped", label: "Pooped today", shortLabel: "Poop", icon: "poop", color: "lilac", unit: "times" },
+    { key: "peed", label: "Peed today", shortLabel: "Pee", icon: "pee", color: "blueberry", unit: "times" },
   ];
   const activeItem = mobileMetrics.find((item) => item.key === activeMetric)!;
   const switchTrackingMode = (direction: -1 | 1) => {
@@ -1509,7 +1643,6 @@ export default function App() {
       const index = mobileMetrics.findIndex((item) => item.key === current);
       return mobileMetrics[(index + direction + mobileMetrics.length) % mobileMetrics.length].key;
     });
-    setUndoAction(null);
     setTapBurst(0);
     setShowBreakdown(false);
   };
@@ -1530,6 +1663,24 @@ export default function App() {
     setModeSwipeTransition((current) => ({ direction: direction > 0 ? "next" : "previous", key: (current?.key ?? 0) + 1 }));
     switchTrackingMode(direction);
   };
+  const handleCatPickerPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "mouse") return;
+    catSwipeStart.current = { x: event.clientX, y: event.clientY };
+  };
+  const handleCatPickerPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    const start = catSwipeStart.current;
+    catSwipeStart.current = null;
+    if (!start || cats.length < 2) return;
+    const deltaX = event.clientX - start.x;
+    const deltaY = event.clientY - start.y;
+    if (Math.abs(deltaX) < 42 || Math.abs(deltaX) < Math.abs(deltaY) * 1.2) return;
+    ignoreNextCatTap.current = true;
+    window.setTimeout(() => { ignoreNextCatTap.current = false; }, 300);
+    const currentIndex = Math.max(0, cats.findIndex((cat) => String(cat.id) === String(selectedId)));
+    const nextIndex = (currentIndex + (deltaX < 0 ? 1 : -1) + cats.length) % cats.length;
+    setSelectedId(cats[nextIndex].id);
+    setShowBreakdown(false);
+  };
   const activeValue = tracker[activeMetric] as number | boolean;
   const activeGoal = activeItem.goal ? (tracker[activeItem.goal] as number) : undefined;
   const breakdownAmount = activeMetric === "cans"
@@ -1538,6 +1689,15 @@ export default function App() {
   const breakdownAmountLabel = String(Number(breakdownAmount.toFixed(1)));
   const isToggle = typeof activeValue === "boolean";
   const isComplete = isToggle ? activeValue : activeGoal ? activeValue >= activeGoal : false;
+  const availableUndoActions = undoActions
+    .filter((entry) => String(entry.catId) === String(selectedId) && undoNow - entry.timestamp >= 0 && undoNow - entry.timestamp <= 15000 && canUndoCareAction(entry.actorUserId, cloudSession?.user.id))
+    .sort((left, right) => right.timestamp - left.timestamp);
+  const undoAvailable = undoNow <= undoRevealUntil && availableUndoActions.length > 0;
+  const careWarning = activeMetric === "played" && Number(activeValue) >= 5
+    ? "That’s a lot of play sessions today. Check the care log before adding more."
+    : activeGoal && Number(activeValue) >= activeGoal
+      ? `You’ve reached ${selectedCat.name}’s ${activeItem.shortLabel.toLowerCase()} goal. Check before adding more.`
+      : "";
   const now = new Date();
   const activityEntries = careLogs.filter((entry) => {
     const timestamp = new Date(entry.timestamp);
@@ -1562,7 +1722,7 @@ export default function App() {
   const handleBigTap = () => {
     if (activeMetric === "cans") {
       const amountDelta = 0.1;
-      setUndoAction({ catId: selectedId, metric: "cans", amountDelta, actorUserId: cloudSession?.user.id });
+      queueUndoAction(selectedId, "cans", amountDelta);
       addCareLog("cans", "Added 10% of a can", amountDelta);
       setTrackers((current) => ({
         ...current,
@@ -1579,12 +1739,12 @@ export default function App() {
     } else if (typeof activeValue === "number") {
       const unit = metricUnits[activeMetric] ?? "";
       const displayUnit = unit.replace(/s$/, "");
+      queueUndoAction(selectedId, activeMetric, 1);
       addCareLog(activeMetric, `Added 1${displayUnit ? ` ${displayUnit}` : ""}`, 1);
       setTrackers((current) => {
         const latest = { ...emptyTracker, ...(current[selectedId] ?? {}) };
         return { ...current, [selectedId]: { ...latest, [activeMetric]: Number(latest[activeMetric]) + 1 } };
       });
-      setUndoAction({ catId: selectedId, metric: activeMetric, amountDelta: 1, actorUserId: cloudSession?.user.id });
     } else {
       if (!activeValue && (activeMetric === "peed" || activeMetric === "pooped")) {
         playCareSound(activeMetric);
@@ -1595,31 +1755,43 @@ export default function App() {
   };
 
   const undoLastTap = () => {
-    if (!undoAction || String(undoAction.catId) !== String(selectedId)) return;
-    setUndoAction(null);
-    if (!canUndoCareAction(undoAction.actorUserId, cloudSession?.user.id)) return;
-    const amountDelta = undoAction.amountDelta;
-    if (undoAction.metric === "cans") {
+    const action = availableUndoActions[0];
+    if (!action) return;
+    setUndoActions((current) => current.filter((entry) => entry.id !== action.id));
+    const amountDelta = action.amountDelta;
+    if (action.metric === "cans") {
       setTrackers((current) => ({
         ...current,
-        [undoAction.catId]: (() => {
-          const latest = { ...emptyTracker, ...(current[undoAction.catId] ?? {}) };
+        [action.catId]: (() => {
+          const latest = { ...emptyTracker, ...(current[String(action.catId)] ?? {}) };
           return { ...latest, ...undoWetFoodDelta(latest.cans, latest.canProgress, amountDelta) };
         })(),
       }));
-      addCareLog("cans", "Undid this check-in", -amountDelta);
+      const reverseDetail = amountDelta > 0 ? "Removed" : "Added";
+      const reverseAmount = Math.abs(amountDelta);
+      addCareLog("cans", `${reverseDetail} ${reverseAmount === 0.1 ? "10% of a can" : `${reverseAmount} cans`}`, -amountDelta);
       return;
     }
-    const unit = metricUnits[undoAction.metric] ?? "";
-    const displayUnit = amountDelta === 1 ? unit.replace(/s$/, "") : unit;
-    const amountText = Number.isInteger(amountDelta) ? String(amountDelta) : String(Number(amountDelta.toFixed(1)));
-    const currentValue = { ...emptyTracker, ...(trackers[undoAction.catId] ?? {}) }[undoAction.metric];
+    const unit = metricUnits[action.metric] ?? "";
+    const absoluteDelta = Math.abs(amountDelta);
+    const displayUnit = absoluteDelta === 1 ? unit.replace(/s$/, "") : unit;
+    const amountText = Number.isInteger(absoluteDelta) ? String(absoluteDelta) : String(Number(absoluteDelta.toFixed(1)));
+    const currentValue = { ...emptyTracker, ...(trackers[String(action.catId)] ?? {}) }[action.metric];
+    if (typeof currentValue === "boolean") {
+      setTrackers((current) => {
+        const latest = { ...emptyTracker, ...(current[String(action.catId)] ?? {}) };
+        return { ...current, [action.catId]: { ...latest, [action.metric]: !currentValue } };
+      });
+      addCareLog(action.metric, amountDelta > 0 ? "Undid this check-in" : "Marked done", -amountDelta);
+      return;
+    }
     if (typeof currentValue !== "number") return;
     setTrackers((current) => {
-      const latest = { ...emptyTracker, ...(current[undoAction.catId] ?? {}) };
-      return { ...current, [undoAction.catId]: { ...latest, [undoAction.metric]: undoNumericDelta(latest[undoAction.metric] as number, amountDelta) } };
+      const latest = { ...emptyTracker, ...(current[String(action.catId)] ?? {}) };
+      return { ...current, [action.catId]: { ...latest, [action.metric]: undoNumericDelta(latest[action.metric] as number, amountDelta) } };
     });
-    addCareLog(undoAction.metric, `Removed ${amountText}${displayUnit ? ` ${displayUnit}` : ""}`, -amountDelta);
+    const reverseVerb = amountDelta > 0 ? "Removed" : "Added";
+    addCareLog(action.metric, `${reverseVerb} ${amountText}${displayUnit ? ` ${displayUnit}` : ""}`, -amountDelta);
   };
 
   if (isSupabaseConfigured && (!cloudSession || authLoading)) {
@@ -1631,6 +1803,7 @@ export default function App() {
 
   return (
     <div className="app-root">
+      <div className="app-utility-bar">{notificationCenter}{themeToggle}</div>
       <div className={`app-shell ${activeTab !== "care" || cats.length === 0 ? "family-route-hidden" : ""}`}>
       <aside className="sidebar">
         <a className="brand" href="#" aria-label="Purrfect day home">
@@ -1650,7 +1823,7 @@ export default function App() {
             <button
               className={selectedId === cat.id ? "selected" : ""}
               key={cat.id}
-              onClick={() => { setSelectedId(cat.id); setUndoAction(null); }}
+              onClick={() => { setSelectedId(cat.id); }}
             >
               <CatAvatar cat={cat} />
               <span>{cat.name}</span>
@@ -1676,9 +1849,6 @@ export default function App() {
             <span className="brand-mark"><Icon name="paw" size={20} /></span>
             <span>Purrfect<span>day</span></span>
           </a>
-          <div className="mobile-header-actions">
-            {themeToggle}
-          </div>
         </header>
 
         <section className="mobile-tracker">
@@ -1686,18 +1856,15 @@ export default function App() {
             <div>
               <p>Taking care of</p>
               <h1>{selectedCat.name}</h1>
-              <label className="photo-picker">
-                {selectedCat.photo ? "Change photo" : "Add a photo"}
-                <input accept="image/*,.heic,.heif" type="file" onChange={(event) => { void openCatPhotoEditor(event.target.files?.[0]); event.target.value = ""; }} />
-              </label>
+              <button className="edit-profile-trigger" onClick={() => openCatProfile(selectedCat.id)} type="button"><Icon name="edit" size={14} /> Edit profile</button>
             </div>
-            <div className="mobile-cat-picker">
+            <div aria-label="Swipe to switch cats" className="mobile-cat-picker" onPointerDown={handleCatPickerPointerDown} onPointerUp={handleCatPickerPointerUp} onPointerCancel={() => { catSwipeStart.current = null; }}>
               {cats.map((cat) => (
                 <button
                   aria-label={`Track care for ${cat.name}`}
                   className={cat.id === selectedId ? "active" : ""}
                   key={cat.id}
-                  onClick={() => { setSelectedId(cat.id); setUndoAction(null); }}
+                  onClick={() => { if (ignoreNextCatTap.current) { ignoreNextCatTap.current = false; return; } setSelectedId(cat.id); }}
                 >
                   <CatAvatar cat={cat} />
                 </button>
@@ -1713,7 +1880,6 @@ export default function App() {
                 <i style={{ width: `${Math.max(5, (completed / 7) * 100)}%` }} />
               </div>
             </div>
-            <small>{completed === 7 ? "Perfect day" : "Keep going"}</small>
           </div>
           {cloudError && <p className="cloud-feedback" role="status">{cloudError}</p>}
 
@@ -1731,27 +1897,18 @@ export default function App() {
             onPointerUp={handleTrackerPointerUp}
             onPointerCancel={() => { swipeStart.current = null; }}
           >
-          {undoAction && String(undoAction.catId) === String(selectedId) && !showBreakdown && (
-            <button aria-label={`Undo last ${undoAction.metric === "cans" ? "wet food tap" : "+1"}`} className="tap-undo-icon" onClick={undoLastTap} title="Undo last check-in" type="button">
-              <Icon name="undo" size={17} />
+          {undoAvailable && !showBreakdown && (
+            <button aria-label={`Undo recent care action, ${availableUndoActions.length} available`} className="tap-undo-icon" onClick={undoLastTap} title="Undo a recent check-in" type="button">
+              <Icon name="undo" size={17} /><span>{availableUndoActions.length}</span>
             </button>
           )}
           <div className="big-tap-flip">
-          <button
+          <div
             key={modeSwipeTransition?.key ?? 0}
-            aria-label={isToggle ? `Toggle ${activeItem.label}` : `Add one ${activeItem.unit}`}
-            aria-hidden={showBreakdown}
+            aria-label={`${activeItem.label} tracker`}
+            aria-hidden={showBreakdown || undefined}
             className={`big-tap-card ${activeItem.color} metric-${activeMetric} ${isComplete ? "complete" : ""} ${modeSwipeTransition ? `mode-swipe-${modeSwipeTransition.direction}` : ""}`}
-            disabled={showBreakdown}
-            tabIndex={showBreakdown ? -1 : 0}
-            onClick={() => {
-              if (ignoreNextTap.current) {
-                ignoreNextTap.current = false;
-                return;
-              }
-              setShowBreakdown(false);
-              handleBigTap();
-            }}
+            role="group"
           >
             <div className="tap-doodles" aria-hidden="true">
               <i /><i /><i />
@@ -1780,7 +1937,11 @@ export default function App() {
                 {activeGoal && <GoalProgress className="big-goal-progress" value={Number(activeValue)} goal={activeGoal} />}
               </>
             )}
-            <span className="tap-prompt">
+            <button aria-label={activeMetric === "cans" ? "Tap to add 10%" : isToggle ? activeValue ? "Tap to undo" : "Tap when done" : "Tap to add one"} className="tap-prompt" disabled={showBreakdown} onClick={() => {
+              if (ignoreNextTap.current) { ignoreNextTap.current = false; return; }
+              setShowBreakdown(false);
+              handleBigTap();
+            }} type="button">
               <Icon name={isToggle && activeValue ? "check" : "plus"} size={17} />
               {activeMetric === "cans"
                 ? "Tap to add 10%"
@@ -1789,7 +1950,7 @@ export default function App() {
                     ? (activeValue ? "Tap to undo this week" : "Tap when done this week")
                     : (activeValue ? "Tap to undo" : "Tap when done")
                   : "Tap to add one"}
-            </span>
+            </button>
             {tapBurst > 0 && (
               <div className={`metric-scene variant-${tapBurst % 3}`} key={tapBurst} aria-hidden="true">
                 {(activeMetric === "treats" || activeMetric === "kibble" || activeMetric === "cans") && (
@@ -1829,7 +1990,7 @@ export default function App() {
                 </div>
               </div>
             )}
-          </button>
+          </div>
           <button aria-hidden={showBreakdown} className="feeding-breakdown-trigger" disabled={showBreakdown} onClick={() => setShowBreakdown(true)} tabIndex={showBreakdown ? -1 : 0} type="button">
             {breakdownQuestions[activeMetric]} <span aria-label={`${breakdownAmountLabel} tracked`}>{breakdownAmountLabel}</span>
           </button>
@@ -1864,6 +2025,7 @@ export default function App() {
                 ? "This check-in resets each week"
                 : "Tap the big card whenever it happens"}
           </p>
+          {careWarning && <p className="care-limit-warning" role="status">{careWarning}</p>}
           {showTrackPicker && <div className="track-picker-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowTrackPicker(false); }}>
             <section aria-labelledby="track-picker-title" aria-modal="true" className="track-picker-dialog" role="dialog">
               <header><div><span>Care tracker</span><h2 id="track-picker-title">What would you like to track?</h2></div><button aria-label="Close tracking options" onClick={() => setShowTrackPicker(false)} type="button">×</button></header>
@@ -1877,7 +2039,6 @@ export default function App() {
                     key={item.key}
                     onClick={() => {
                       setActiveMetric(item.key);
-                      setUndoAction(null);
                       setTapBurst(0);
                       setShowBreakdown(false);
                       setShowTrackPicker(false);
@@ -1906,10 +2067,7 @@ export default function App() {
               <p className="eyebrow">Today with {selectedCat.name}</p>
               <h1>How’s your little one?</h1>
               <p className="date"><Icon name="calendar" size={16} /> {dateLabel}</p>
-              <label className="photo-picker">
-                {selectedCat.photo ? "Change photo" : "Add a photo"}
-                <input accept="image/*,.heic,.heif" type="file" onChange={(event) => { void openCatPhotoEditor(event.target.files?.[0]); event.target.value = ""; }} />
-              </label>
+              <button className="edit-profile-trigger" onClick={() => openCatProfile(selectedCat.id)} type="button"><Icon name="edit" size={14} /> Edit profile</button>
               {photoError && <small className="photo-error">{photoError}</small>}
             </div>
           </div>
@@ -1919,13 +2077,10 @@ export default function App() {
               <strong>{completed} of 7</strong>
             </div>
             <div className="progress-track"><span style={{ width: `${(completed / 7) * 100}%` }} /></div>
-            <small>{completed === 7 ? "All done — what a loved kitty!" : "You’re doing great!"}</small>
-          </div>
-          <div className="page-header-actions">
-            {themeToggle}
           </div>
         </section>
         {cloudError && <p className="cloud-feedback desktop-cloud-feedback" role="status">{cloudError}</p>}
+        {undoAvailable && <button aria-label={`Undo recent care action, ${availableUndoActions.length} available`} className="desktop-undo-action" onClick={undoLastTap} type="button"><Icon name="undo" size={16} /> Undo{availableUndoActions.length > 1 ? ` (${availableUndoActions.length})` : ""}</button>}
 
         <section className="dashboard-grid">
           <article className="card food-card">
@@ -1939,19 +2094,19 @@ export default function App() {
             </div>
             <div className="tracker-list">
               <div className="tracker-row">
-                <span className="item-icon yellow"><Icon name="treat" size={19} /></span>
-                <div className="tracker-label"><strong>Dental treats</strong><small>pieces</small><GoalProgress value={tracker.treats} goal={tracker.treatsGoal} color="#E3A238" /></div>
-                <Stepper value={tracker.treats} goal={tracker.treatsGoal} onChange={(v) => update("treats", v)} accent="#E3A238" />
+                <span className="item-icon food-treats"><Icon name="treat" size={19} /></span>
+                <div className="tracker-label"><strong>Dental treats</strong><small>pieces</small><GoalProgress value={tracker.treats} goal={tracker.treatsGoal} color="#78915B" /></div>
+                <Stepper value={tracker.treats} goal={tracker.treatsGoal} onChange={(v) => update("treats", v)} accent="#78915B" />
               </div>
               <div className="tracker-row">
-                <span className="item-icon blue"><Icon name="bowl" size={19} /></span>
-                <div className="tracker-label"><strong>Kibble</strong><small>spoons</small><GoalProgress value={tracker.kibble} goal={tracker.kibbleGoal} color="#6D91CA" /></div>
-                <Stepper value={tracker.kibble} goal={tracker.kibbleGoal} onChange={(v) => update("kibble", v)} accent="#6D91CA" />
+                <span className="item-icon food-kibble"><Icon name="bowl" size={19} /></span>
+                <div className="tracker-label"><strong>Kibble</strong><small>spoons</small><GoalProgress value={tracker.kibble} goal={tracker.kibbleGoal} color="#A66D42" /></div>
+                <Stepper value={tracker.kibble} goal={tracker.kibbleGoal} onChange={(v) => update("kibble", v)} accent="#A66D42" />
               </div>
               <div className="tracker-row">
-                <span className="item-icon green"><Icon name="medical" size={18} /></span>
-                <div className="tracker-label"><strong>Wet food</strong><small>cans</small><GoalProgress value={tracker.cans} goal={tracker.cansGoal} color="#71A991" /></div>
-                <Stepper value={tracker.cans} goal={tracker.cansGoal} onChange={(v) => update("cans", v)} accent="#71A991" />
+                <span className="item-icon food-wet"><Icon name="medical" size={18} /></span>
+                <div className="tracker-label"><strong>Wet food</strong><small>cans</small><GoalProgress value={tracker.cans} goal={tracker.cansGoal} color="#D0A365" /></div>
+                <Stepper value={tracker.cans} goal={tracker.cansGoal} onChange={(v) => update("cans", v)} accent="#D0A365" />
               </div>
               <div className="tracker-row">
                 <span className="item-icon aqua"><Icon name="drop" size={19} /></span>
@@ -1977,8 +2132,8 @@ export default function App() {
                 <span className="item-icon lavender"><Icon name="sparkle" size={19} /></span>
                 <div className="tracker-label"><strong>Bathroom check</strong><small>today</small></div>
                 <div className="split-toggles">
-                  <Toggle active={tracker.pooped} onClick={() => update("pooped", !tracker.pooped)} label={<><Icon name="poop" size={14} /> Pooped</>} />
-                  <Toggle active={tracker.peed} onClick={() => update("peed", !tracker.peed)} label={<><Icon name="pee" size={14} /> Peed</>} />
+                  <div className="bathroom-counter"><Icon name="poop" size={16} /><Stepper accent="#7767A5" label="Poop" value={tracker.pooped} onChange={(value) => update("pooped", value)} /></div>
+                  <div className="bathroom-counter"><Icon name="pee" size={16} /><Stepper accent="#4A8FA0" label="Pee" value={tracker.peed} onChange={(value) => update("peed", value)} /></div>
                 </div>
               </div>
               <div className="tracker-row weekly-row">
@@ -2012,15 +2167,14 @@ export default function App() {
       </div>
 
       {showAddCat && (
-        <div className="modal-backdrop" onMouseDown={() => setShowAddCat(false)}>
-          <form className="modal" onSubmit={addCat} onMouseDown={(event) => event.stopPropagation()}>
+        <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !addCatBusy) setShowAddCat(false); }}>
+          <form aria-labelledby="add-cat-title" aria-modal="true" className="modal" onSubmit={addCat} onMouseDown={(event) => event.stopPropagation()} role="dialog">
             <span className="modal-icon"><Icon name="paw" size={24} /></span>
-            <h2>Add a new cat</h2>
+            <h2 id="add-cat-title">Add a new cat</h2>
             <p>Who’s joining the family?</p>
             <label>
               Cat’s name
               <input
-                autoFocus
                 maxLength={24}
                 onChange={(event) => setNewCatName(event.target.value)}
                 placeholder="e.g. Miso"
@@ -2059,28 +2213,47 @@ export default function App() {
             )}
             {photoError && <small className="photo-error">{photoError}</small>}
             <div className="modal-actions">
-              <button type="button" onClick={() => { setShowAddCat(false); setNewCatPhoto(undefined); setNewCatPhotoPosition({ x: 50, y: 50 }); setNewCatPhotoZoom(1); setPhotoError(""); }}>Cancel</button>
-              <button type="submit" disabled={!newCatName.trim()}><Icon name="plus" size={17} /> Add cat</button>
+              <button disabled={addCatBusy} type="button" onClick={() => { setShowAddCat(false); setNewCatPhoto(undefined); setNewCatPhotoPosition({ x: 50, y: 50 }); setNewCatPhotoZoom(1); setPhotoError(""); }}>Cancel</button>
+              <button type="submit" disabled={addCatBusy || !newCatName.trim()}>{addCatBusy ? <><span className="button-spinner" /> Adding…</> : <><Icon name="plus" size={17} /> Add cat</>}</button>
             </div>
           </form>
         </div>
       )}
 
-      {photoEditCatId !== null && photoEditDraft && (
-        <div className="modal-backdrop" onMouseDown={cancelCatPhotoEdit}>
-          <section aria-labelledby="edit-cat-photo-title" aria-modal="true" className="modal" onMouseDown={(event) => event.stopPropagation()} role="dialog">
+      {profileEditCatId !== null && (() => {
+        const cat = cats.find((entry) => String(entry.id) === String(profileEditCatId));
+        if (!cat) return null;
+        return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !profileSaving && !profilePhotoLoading) setProfileEditCatId(null); }}>
+          <form aria-labelledby="edit-cat-profile-title" aria-modal="true" className="modal cat-profile-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={(event) => void saveCatProfile(event)} role="dialog">
             <span className="modal-icon"><Icon name="paw" size={24} /></span>
-            <h2 id="edit-cat-photo-title">Change {cats.find((cat) => cat.id === photoEditCatId)?.name ?? "cat"}’s photo</h2>
-            <p>Choose how the photo appears in the cat icon.</p>
-            <CatPhotoCropEditor photo={photoEditDraft} position={newCatPhotoPosition} onPositionChange={setNewCatPhotoPosition} zoom={newCatPhotoZoom} onZoomChange={setNewCatPhotoZoom} />
+            <h2 id="edit-cat-profile-title">Edit {cat.name}</h2>
+            <p>Update {cat.name}’s profile and daily food goals.</p>
+            <label>Cat’s name<input maxLength={60} onChange={(event) => setProfileNameDraft(event.target.value)} required value={profileNameDraft} /></label>
+            <section className="profile-photo-field" aria-label="Cat profile photo">
+              <strong>Photo</strong>
+              {profilePhotoDraft && profilePhotoDraft !== cat.photo
+                ? <CatPhotoCropEditor photo={profilePhotoDraft} position={profilePhotoPosition} onPositionChange={setProfilePhotoPosition} zoom={profilePhotoZoom} onZoomChange={setProfilePhotoZoom} />
+                : <div className="profile-current-photo">{profilePhotoDraft ? <img alt={`${cat.name} profile preview`} src={profilePhotoDraft} /> : <span aria-hidden="true"><Icon name="paw" size={30} /></span>}</div>}
+              <label className="cat-photo-upload-control profile-photo-choose"><span>{profilePhotoLoading ? "Preparing photo…" : profilePhotoDraft ? "Choose a different photo" : "Choose photo"}</span><input aria-label="Choose profile photo" accept="image/*,.heic,.heif" disabled={profilePhotoLoading || profileSaving} onChange={async (event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                setProfilePhotoLoading(true);
+                try { setProfilePhotoDraft(await readCatPhoto(file)); setProfilePhotoPosition({ x: 50, y: 50 }); setProfilePhotoZoom(1); setPhotoError(""); }
+                catch (cause) { setPhotoError(errorMessage(cause, "Could not decode this photo.")); }
+                finally { setProfilePhotoLoading(false); event.target.value = ""; }
+              }} type="file" /></label>
+              {profilePhotoDraft && <button className="profile-photo-remove" disabled={profileSaving || profilePhotoLoading} onClick={() => setProfilePhotoDraft(undefined)} type="button">Remove photo</button>}
+            </section>
+            <div className="profile-goals"><strong>Daily food goals</strong><div className="quota-fields">
+              <label><span><Icon name="treat" size={18} /> Dental treats <small>pieces</small></span><input aria-label="Dental treats goal" inputMode="numeric" min="1" onChange={(event) => setProfileGoalDrafts((current) => ({ ...current, treatsGoal: event.target.value }))} type="number" value={profileGoalDrafts.treatsGoal} /></label>
+              <label><span><Icon name="bowl" size={18} /> Kibble <small>spoons</small></span><input aria-label="Kibble goal" inputMode="numeric" min="1" onChange={(event) => setProfileGoalDrafts((current) => ({ ...current, kibbleGoal: event.target.value }))} type="number" value={profileGoalDrafts.kibbleGoal} /></label>
+              <label><span><Icon name="medical" size={18} /> Wet food <small>cans</small></span><input aria-label="Wet food goal" inputMode="numeric" min="1" onChange={(event) => setProfileGoalDrafts((current) => ({ ...current, cansGoal: event.target.value }))} type="number" value={profileGoalDrafts.cansGoal} /></label>
+            </div></div>
             {photoError && <small className="photo-error">{photoError}</small>}
-            <div className="modal-actions">
-              <button disabled={photoEditSaving} onClick={cancelCatPhotoEdit} type="button">Cancel</button>
-              <button disabled={photoEditSaving} onClick={() => void saveCatPhotoEdit()} type="button">{photoEditSaving ? "Saving…" : "Save photo"}</button>
-            </div>
-          </section>
-        </div>
-      )}
+            <div className="modal-actions"><button disabled={profileSaving || profilePhotoLoading} onClick={() => setProfileEditCatId(null)} type="button">Cancel</button><button disabled={profileSaving || profilePhotoLoading || !profileNameDraft.trim()} type="submit">{profileSaving ? <><span className="button-spinner" /> Saving…</> : "Save profile"}</button></div>
+          </form>
+        </div>;
+      })()}
 
       {showQuotas && (
         <div className="modal-backdrop" onMouseDown={() => setShowQuotas(false)}>
@@ -2146,14 +2319,13 @@ export default function App() {
         familyName={cloudFamily?.name}
         onManageFamily={() => setActiveTab("family")}
         onAdd={() => setShowAddCat(true)}
-        onPhoto={(id, file) => void openCatPhotoEditor(file, id)}
+        onEdit={openCatProfile}
         onRemove={removeCat}
-        onRename={renameCat}
-        onSelect={(id) => { setSelectedId(id); setUndoAction(null); setActiveTab("care"); }}
+        onSelect={(id) => { setSelectedId(id); setActiveTab("care"); }}
         selectedId={selectedId}
         summaries={Object.fromEntries(cats.map((cat) => { const current = { ...emptyTracker, ...(trackers[String(cat.id)] ?? {}) }; return [String(cat.id), { ...current, ears: current.earsWeek === (cloudFamily ? getFamilyCareWindow(cloudFamily.timezone).weekStart : getLocalWeekKey()) && current.ears }]; }))}
       />}
-      {activeTab === "family" && <FamilyPortal cats={cats} initialFamily={cloudFamily ?? undefined} initialMembers={cloudFamily ? cloudMembers : undefined} initialSession={cloudSession} onClose={() => { setActiveTab(cloudFamily ? "care" : "cats"); setCloudRefreshTick((tick) => tick + 1); }} onManageCats={() => setActiveTab("cats")} onSelectCat={(id) => { setSelectedId(id); setUndoAction(null); setActiveTab("care"); }} />}
+      {activeTab === "family" && <FamilyPortal cats={cats} initialFamily={cloudFamily ?? undefined} initialMembers={cloudFamily ? cloudMembers : undefined} initialSession={cloudSession} onClose={() => { setActiveTab(cloudFamily ? "care" : "cats"); setCloudRefreshTick((tick) => tick + 1); }} onManageCats={() => setActiveTab("cats")} onSelectCat={(id) => { setSelectedId(id); setActiveTab("care"); }} />}
       {pendingCatRemoval && <ConfirmDialog
         title={`Remove ${pendingCatRemoval.name}?`}
         description={`${pendingCatRemoval.name} will be removed from your family tracker. Their existing care history will be kept.`}

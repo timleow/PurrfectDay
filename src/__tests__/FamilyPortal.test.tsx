@@ -68,10 +68,11 @@ function signedInSession() {
 }
 
 describe("family release scope and workspace", () => {
-  it("keeps person emails below names and remove actions at the right edge", () => {
+  it("keeps person emails below names and styles removal like the edit icon", () => {
     const css = readFileSync("src/components/FamilyPortal.css", "utf8");
     expect(css).toMatch(/\.family-member-list \.family-member-identity\s*\{[^}]*flex:\s*1/s);
-    expect(css).toMatch(/\.family-remove-button\s*\{\s*margin-left:\s*auto/s);
+    expect(css).toMatch(/\.family-remove-button\s*\{[^}]*width:\s*34px;[^}]*height:\s*31px;[^}]*background:\s*#fbefeb/s);
+    expect(css).toMatch(/\.family-remove-button svg\s*\{[^}]*width:\s*14px;[^}]*height:\s*14px/s);
     expect(css).toMatch(/\.family-member-list small\s*\{\s*display:\s*block/s);
   });
 

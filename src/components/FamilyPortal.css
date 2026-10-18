@@ -1,6 +1,6 @@
 .family-portal-page {
   min-height: 100vh;
-  padding: 36px 28px 112px;
+  padding: 18px 28px 112px;
 }
 
 .family-portal {
@@ -100,7 +100,7 @@
   place-items: center;
   border-radius: 18px;
   color: #6f927f;
-  background: #edf3ee;
+  background: #fbefeb;
   font-size: 25px;
 }
 
@@ -496,16 +496,31 @@
 }
 
 .family-remove-button {
-  margin-left: auto;
-  padding: 6px 8px;
+  display: grid;
+  width: 34px;
+  height: 31px;
+  flex: 0 0 auto;
+  padding: 0;
+  place-items: center;
   border: 0;
-  border-radius: 8px;
+  border-radius: 9px;
   color: #a35d54;
   background: #fbefeb;
   cursor: pointer;
-  font-size: 9px;
-  font-weight: 700;
-  white-space: nowrap;
+}
+
+.family-remove-button svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.family-remove-button:hover {
+  background: #f5e1dc;
 }
 
 .family-remove-button:disabled,
@@ -557,6 +572,7 @@
   color: #efaaa0;
   background: #493532;
 }
+:root[data-theme="dark"] .family-remove-button:hover { background: #5a3e3a; }
 
 .family-empty-row {
   color: #938b81;
@@ -617,7 +633,7 @@
 
 @media (max-width: 640px) {
   .family-portal-page {
-    padding: 14px 10px 108px;
+    padding: 8px 10px 108px;
   }
 
   .family-portal {

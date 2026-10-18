@@ -123,7 +123,7 @@ describe("rapid shared-care updates", () => {
   it("keeps quick taps visible when a stale server snapshot arrives", async () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
-    const tapButton = await screen.findByRole("button", { name: "Add one treats" });
+    const tapButton = await screen.findByRole("button", { name: "Tap to add one" });
 
     await user.click(tapButton);
     await user.click(tapButton);
