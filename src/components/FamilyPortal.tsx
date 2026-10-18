@@ -104,6 +104,12 @@ export default function FamilyPortal({ onClose, cats = [], onManageCats = () => 
 
   useEffect(() => () => { if (editCloseTimer.current !== undefined) window.clearTimeout(editCloseTimer.current); }, []);
 
+  useEffect(() => {
+    const refreshOnPull = () => setWorkspaceLoadTick((tick) => tick + 1);
+    window.addEventListener("purrfect:pull-to-refresh", refreshOnPull);
+    return () => window.removeEventListener("purrfect:pull-to-refresh", refreshOnPull);
+  }, []);
+
   function closeEditDialog(close: () => void) {
     if (closingEditDialog) return;
     setClosingEditDialog(true);

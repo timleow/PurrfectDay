@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeWorkspaceCache } from "../data/workspaceCache";
@@ -89,12 +89,13 @@ describe("rapid shared-care updates", () => {
       { id: "undo-action", family_id: "family-1", cat_id: "cat-1", actor_user_id: "person-2", metric: "treats", amount_delta: -1, unit: "treats", detail: "Removed 1 treat", occurred_at: new Date(now - 20_000).toISOString() },
       { id: "other-active-action", family_id: "family-1", cat_id: "cat-1", actor_user_id: "person-2", metric: "treats", amount_delta: 2, unit: "treats", detail: "Added 2 treats", occurred_at: new Date(now - 10_000).toISOString() },
     ];
-    localStorage.setItem("purrfect-notifications-seen-at:person-1", String(now - 60_000));
     localStorage.setItem("purrfect-notifications-seen-at:person-2", "123");
     localStorage.setItem("purrfect-notifications-seen-at", "456");
 
     const user = userEvent.setup();
     render(<App />);
+    await waitFor(() => expect(cloudMocks.listCareEvents).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("button", { name: "Care notifications" }).querySelector(".notification-badge")?.textContent).toBe("1");
     await user.click(await screen.findByRole("button", { name: "Care notifications" }));
 
     const recentCare = screen.getByRole("dialog", { name: "Recent care activity" });
@@ -106,6 +107,17 @@ describe("rapid shared-care updates", () => {
     expect(Number(localStorage.getItem("purrfect-notifications-seen-at:person-1"))).toBeGreaterThan(now - 60_000);
     expect(localStorage.getItem("purrfect-notifications-seen-at:person-2")).toBe("123");
     expect(localStorage.getItem("purrfect-notifications-seen-at")).toBe("456");
+  });
+
+  it("refreshes shared data when the user pulls down from the top", async () => {
+    render(<App />);
+    await waitFor(() => expect(cloudMocks.listCareEvents).toHaveBeenCalledTimes(1));
+
+    fireEvent.touchStart(window, { touches: [{ identifier: 1, clientX: 120, clientY: 10 }] });
+    fireEvent.touchMove(window, { touches: [{ identifier: 1, clientX: 122, clientY: 100 }] });
+    fireEvent.touchEnd(window, { changedTouches: [{ identifier: 1, clientX: 122, clientY: 100 }] });
+
+    await waitFor(() => expect(cloudMocks.listCareEvents).toHaveBeenCalledTimes(2));
   });
 
   it("shows a recent cached workspace immediately while refreshing it from Supabase", async () => {

@@ -105,6 +105,7 @@ type CareLog = {
   timestamp: string;
   amountDelta?: number;
   batchCount?: number;
+  latestTimestamp?: string;
 };
 
 type PendingCareAction = {
@@ -302,7 +303,7 @@ function batchCareLogs(logs: CareLog[]) {
         ? ({ treats: "treat", kibble: "spoon", teethPawing: "time", played: "session" } as Partial<Record<TrackableKey, string>>)[metric] ?? metricUnits[metric] ?? "times"
         : metricUnits[metric] ?? "times"}`;
 
-    return { ...first, detail, amountDelta: totalDelta, batchCount: group.length };
+    return { ...first, detail, amountDelta: totalDelta, batchCount: group.length, latestTimestamp: group[group.length - 1].timestamp };
   }).sort((left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime());
 }
 
@@ -941,6 +942,10 @@ export default function App() {
   const [undoRevealUntil, setUndoRevealUntil] = useState(0);
   const [undoNow, setUndoNow] = useState(() => Date.now());
   const [showNotifications, setShowNotifications] = useState(false);
+  const [pullGestureActive, setPullGestureActive] = useState(false);
+  const [pullRefreshing, setPullRefreshing] = useState(false);
+  const pullStart = useRef<{ x: number; y: number } | null>(null);
+  const pullArmed = useRef(false);
   const catSwipeStart = useRef<{ x: number; y: number } | null>(null);
   const ignoreNextCatTap = useRef(false);
 
@@ -982,6 +987,65 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const onTouchStart = (event: TouchEvent) => {
+      if (window.scrollY > 1 || event.touches.length !== 1) {
+        pullStart.current = null;
+        pullArmed.current = false;
+        return;
+      }
+      const target = event.target;
+      if (target instanceof Element && target.closest("input, textarea, select, button, a, [role='dialog'], .notification-popover, .activity-log-list, .track-picker-dialog")) {
+        pullStart.current = null;
+        return;
+      }
+      const touch = event.touches[0];
+      pullStart.current = { x: touch.clientX, y: touch.clientY };
+      pullArmed.current = false;
+    };
+    const onTouchMove = (event: TouchEvent) => {
+      const start = pullStart.current;
+      const touch = event.touches[0];
+      if (!start || !touch) return;
+      const deltaY = touch.clientY - start.y;
+      const deltaX = touch.clientX - start.x;
+      if (deltaY > 72 && deltaY > Math.abs(deltaX) * 1.25) {
+        pullArmed.current = true;
+        setPullGestureActive(true);
+        event.preventDefault();
+      }
+    };
+    const onTouchEnd = () => {
+      const shouldRefresh = pullArmed.current;
+      pullStart.current = null;
+      pullArmed.current = false;
+      setPullGestureActive(false);
+      if (!shouldRefresh) return;
+      setPullRefreshing(true);
+      if (cloudSession?.user.id) setCloudRefreshTick((tick) => tick + 1);
+      else {
+        const localLogs = localStorage.getItem("purrfect-care-logs");
+        const savedCats = localStorage.getItem("purrfect-cats");
+        const localCats = savedCats ? JSON.parse(savedCats) as Cat[] : [];
+        setCats(localCats);
+        setSelectedId(localCats[0]?.id ?? "");
+        setCareLogs(localLogs ? JSON.parse(localLogs) as CareLog[] : []);
+        setPullRefreshing(false);
+      }
+      window.dispatchEvent(new Event("purrfect:pull-to-refresh"));
+    };
+    window.addEventListener("touchstart", onTouchStart, { passive: true });
+    window.addEventListener("touchmove", onTouchMove, { passive: false });
+    window.addEventListener("touchend", onTouchEnd, { passive: true });
+    window.addEventListener("touchcancel", onTouchEnd, { passive: true });
+    return () => {
+      window.removeEventListener("touchstart", onTouchStart);
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("touchend", onTouchEnd);
+      window.removeEventListener("touchcancel", onTouchEnd);
+    };
+  }, [cloudSession?.user.id]);
+
+  useEffect(() => {
     if (!undoActions.length) return;
     const timer = window.setInterval(() => {
       const now = Date.now();
@@ -1004,7 +1068,7 @@ export default function App() {
   );
 
   const notificationReadKey = `purrfect-notifications-seen-at:${cloudSession?.user.id ?? "local"}`;
-  const notificationsSeenAt = Number(localStorage.getItem(notificationReadKey) ?? Date.now());
+  const notificationsSeenAt = Number(localStorage.getItem(notificationReadKey) ?? 0);
   const currentMemberName = cloudFamily && cloudSession
     ? cloudMembers.find((member) => member.user_id === cloudSession.user.id)?.display_name || cloudSession.user.email?.split("@")[0] || "Family member"
     : memberName.trim() || "Family member";
@@ -1017,7 +1081,7 @@ export default function App() {
       return !isOwnAction && (delta === undefined || delta > 0);
     }))
     .slice(0, 30);
-  const unreadNotificationCount = notificationEntries.filter((entry) => new Date(entry.timestamp).getTime() > notificationsSeenAt).length;
+  const unreadNotificationCount = notificationEntries.filter((entry) => new Date(entry.latestTimestamp ?? entry.timestamp).getTime() > notificationsSeenAt).length;
   const notificationCenter = (
     <div className="notification-center">
       <button aria-expanded={showNotifications} aria-label="Care notifications" className="notification-trigger" onClick={() => {
@@ -1244,7 +1308,10 @@ export default function App() {
       } catch (cause) {
         if (active) setCloudError(cause instanceof Error ? cause.message : "Could not load shared family data.");
       } finally {
-        if (active) setCloudWorkspaceLoading(false);
+        if (active) {
+          setCloudWorkspaceLoading(false);
+          setPullRefreshing(false);
+        }
       }
     })();
     return () => { active = false; };
@@ -1806,6 +1873,7 @@ export default function App() {
 
   return (
     <div className="app-root">
+      {(pullGestureActive || pullRefreshing) && <div className="pull-refresh-indicator" role="status"><span />{pullRefreshing ? "Refreshing…" : "Release to refresh"}</div>}
       <div className="app-utility-bar">{notificationCenter}{themeToggle}</div>
       <div className={`app-shell ${activeTab !== "care" || cats.length === 0 ? "family-route-hidden" : ""}`}>
       <aside className="sidebar">
