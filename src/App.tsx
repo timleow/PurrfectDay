@@ -655,6 +655,7 @@ export default function App() {
   const [addCatBusy, setAddCatBusy] = useState(false);
   const addCatBusyRef = useRef(false);
   const [activeTab, setActiveTab] = useState<"care" | "cats" | "analytics" | "family">("care");
+  const [analyticsInitialRange, setAnalyticsInitialRange] = useState<"day" | "week">("week");
   const [showQuotas, setShowQuotas] = useState(false);
   const [goalDrafts, setGoalDrafts] = useState<Record<FoodGoalKey, string>>({ treatsGoal: "4", kibbleGoal: "3", cansGoal: "1" });
   const [profileEditCatId, setProfileEditCatId] = useState<number | string | null>(null);
@@ -2192,7 +2193,7 @@ export default function App() {
           <Icon name="heart" size={19} />
           <span>Cats</span>
         </button>
-        <button aria-current={activeTab === "analytics" ? "page" : undefined} className={activeTab === "analytics" ? "active" : ""} onClick={() => navigateTo("analytics")} type="button">
+        <button aria-current={activeTab === "analytics" ? "page" : undefined} className={activeTab === "analytics" ? "active" : ""} onClick={() => { setAnalyticsInitialRange("week"); navigateTo("analytics"); }} type="button">
           <Icon name="chart" size={20} />
           <span>Analytics</span>
         </button>
@@ -2218,12 +2219,13 @@ export default function App() {
         familyName={cloudFamily?.name}
         onManageFamily={() => navigateTo("family")}
         onAdd={() => setShowAddCat(true)}
+        onAnalytics={(id) => { setSelectedId(id); setAnalyticsInitialRange("day"); navigateTo("analytics"); }}
         onEdit={openCatProfile}
         onRemove={removeCat}
         onSelect={(id) => { setSelectedId(id); navigateTo("care"); }}
         selectedId={selectedId}
       />}
-      {activeTab === "analytics" && <AnalyticsPage cats={cats} logs={careLogs} goals={Object.fromEntries(cats.map((cat) => { const current = { ...emptyTracker, ...(trackers[String(cat.id)] ?? {}) }; return [String(cat.id), { treatsGoal: current.treatsGoal, kibbleGoal: current.kibbleGoal, cansGoal: current.cansGoal }]; }))} targets={cloudTargets} selectedCatId={selectedId} timezone={cloudFamily?.timezone} />}
+      {activeTab === "analytics" && <AnalyticsPage cats={cats} logs={careLogs} goals={Object.fromEntries(cats.map((cat) => { const current = { ...emptyTracker, ...(trackers[String(cat.id)] ?? {}) }; return [String(cat.id), { treatsGoal: current.treatsGoal, kibbleGoal: current.kibbleGoal, cansGoal: current.cansGoal }]; }))} targets={cloudTargets} selectedCatId={selectedId} timezone={cloudFamily?.timezone} initialRange={analyticsInitialRange} />}
       {activeTab === "family" && <FamilyPortal cats={cats} initialFamily={cloudFamily ?? undefined} initialMembers={cloudFamily ? cloudMembers : undefined} initialSession={cloudSession} workspaceReady={!cloudWorkspaceLoading} onClose={() => { navigateTo(cloudFamily ? "care" : "cats"); setCloudRefreshTick((tick) => tick + 1); }} onManageCats={() => navigateTo("cats")} onSelectCat={(id) => { setSelectedId(id); navigateTo("care"); }} />}
       {pendingCatRemoval && <ConfirmDialog
         title={`Remove ${pendingCatRemoval.name}?`}

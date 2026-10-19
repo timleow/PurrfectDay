@@ -35,15 +35,16 @@ function formatMetricAmount(metric: TrackableKey, amount: number) {
   return `${formatAmount(amount)} ${amount === 1 ? unit.replace(/s$/, "") : unit}`;
 }
 
-export default function AnalyticsPage({ cats, logs, goals, targets = [], timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", selectedCatId }: {
+export default function AnalyticsPage({ cats, logs, goals, targets = [], timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", selectedCatId, initialRange }: {
   cats: OverviewCat[];
   logs: CareLog[];
   goals: Record<string, GoalValues>;
   targets?: TargetRule[];
   timezone?: string;
   selectedCatId: number | string;
+  initialRange?: Range;
 }) {
-  const [range, setRange] = useState<Range>("week");
+  const [range, setRange] = useState<Range>(initialRange ?? "week");
   const [selectedDateKey, setSelectedDateKey] = useState(() => dateKeyInZone(new Date(), timezone));
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [closingDatePicker, setClosingDatePicker] = useState(false);

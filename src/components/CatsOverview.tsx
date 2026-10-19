@@ -12,12 +12,13 @@ type Props = {
   error?: string;
   selectedId: number | string;
   onSelect: (id: number | string) => void;
+  onAnalytics: (id: number | string) => void;
   onAdd: () => void;
   onEdit: (id: number | string) => void;
   onRemove: (cat: OverviewCat) => Promise<void>;
 };
 
-export default function CatsOverview({ cats, foodProgress = {}, familyName, onManageFamily = () => {}, error, selectedId, onSelect, onAdd, onEdit, onRemove }: Props) {
+export default function CatsOverview({ cats, foodProgress = {}, familyName, onManageFamily = () => {}, error, selectedId, onSelect, onAnalytics, onAdd, onEdit, onRemove }: Props) {
   const [feedback, setFeedback] = useState("");
 
   return <main className="cats-page" aria-labelledby="cats-page-title">
@@ -41,7 +42,7 @@ export default function CatsOverview({ cats, foodProgress = {}, familyName, onMa
         <div className="cat-summary-head">
           {cat.photo ? <img className="cat-summary-avatar" src={cat.photo} alt={`${cat.name}`} /> : <span className="cat-summary-avatar cat-summary-initial" style={{ backgroundColor: cat.color }}>{cat.initial}</span>}
           <div className="cat-summary-name"><h2>{cat.name}</h2><span>{selectedId === cat.id ? "Currently selected" : "Ready for care"}</span></div>
-          <button aria-label={`Track care for ${cat.name}`} className="cat-summary-track" onClick={() => onSelect(cat.id)} type="button">Care →</button>
+          <button aria-label={`View ${cat.name} analytics`} className="cat-summary-analytics" onClick={() => onAnalytics(cat.id)} type="button"><CareIcon name="chart" size={17} /></button>
         </div>
         <div aria-label={`${cat.name} food today`} className="cat-summary-food">
           <span aria-label={`Dental treats: ${amount(food.treats)} of ${amount(food.treatsGoal)}`} className="cat-summary-food-item treats" title="Dental treats"><CareIcon name="treat" size={15} /><strong>{amount(food.treats)} / {amount(food.treatsGoal)}</strong></span>

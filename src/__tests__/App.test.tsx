@@ -348,6 +348,18 @@ describe("care tracking corrections", () => {
     expect(css).toMatch(/\.primary-nav\.page-family::before\s*\{\s*transform:\s*translateX\(calc\(300% \+ 9px\)\);/);
   });
 
+  it("opens the chosen cat's daily analytics from the Cats page", async () => {
+    const user = userEvent.setup();
+    renderApp();
+    await user.click(screen.getByRole("button", { name: "Cats" }));
+    await user.click(screen.getByRole("button", { name: "View Mochi analytics" }));
+
+    expect(await screen.findByRole("heading", { name: "Analytics" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Per day" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Show analytics for Mochi" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Per week" }).getAttribute("aria-pressed")).toBe("false");
+  });
+
   it("opens the care menu from the progress heart", async () => {
     const user = userEvent.setup();
     renderApp();
