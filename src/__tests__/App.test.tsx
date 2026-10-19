@@ -327,7 +327,7 @@ describe("tracking and family navigation", () => {
 });
 
 describe("care tracking corrections", () => {
-  it("opens Analytics from the primary navigation between Cats and Family", async () => {
+  it("keeps Analytics and Family navigation routes and selected highlights aligned", async () => {
     const user = userEvent.setup();
     renderApp();
     const navigation = screen.getByRole("navigation", { name: "Primary navigation" });
@@ -335,6 +335,17 @@ describe("care tracking corrections", () => {
     expect(links.map((button) => button.textContent?.trim())).toEqual(["Care", "Cats", "Analytics", "Family"]);
     await user.click(within(navigation).getByRole("button", { name: "Analytics" }));
     expect(await screen.findByRole("heading", { name: "Analytics" })).not.toBeNull();
+    expect(navigation.classList.contains("page-analytics")).toBe(true);
+    expect(within(navigation).getByRole("button", { name: "Analytics" }).getAttribute("aria-current")).toBe("page");
+
+    await user.click(within(navigation).getByRole("button", { name: "Family" }));
+    expect(await screen.findByRole("heading", { name: "Family workspace" })).not.toBeNull();
+    expect(navigation.classList.contains("page-family")).toBe(true);
+    expect(within(navigation).getByRole("button", { name: "Family" }).getAttribute("aria-current")).toBe("page");
+
+    const css = readFileSync("src/index.css", "utf8");
+    expect(css).toMatch(/\.primary-nav\.page-analytics::before\s*\{\s*transform:\s*translateX\(calc\(200% \+ 6px\)\);/);
+    expect(css).toMatch(/\.primary-nav\.page-family::before\s*\{\s*transform:\s*translateX\(calc\(300% \+ 9px\)\);/);
   });
 
   it("opens the care menu from the progress heart", async () => {

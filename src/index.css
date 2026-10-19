@@ -376,11 +376,11 @@ main {
 }
 
 .primary-nav.page-analytics::before {
-  transform: translateX(calc(300% + 9px));
+  transform: translateX(calc(200% + 6px));
 }
 
 .primary-nav.page-family::before {
-  transform: translateX(calc(200% + 6px));
+  transform: translateX(calc(300% + 9px));
 }
 
 .primary-nav button {
