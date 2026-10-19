@@ -120,6 +120,21 @@
 .analytics-status.overshot { color: #b86f50; }
 .analytics-footnote { margin: 14px 0 0; color: #a09a90; font-size: 10px; }
 .analytics-contribution-list { display: grid; margin-top: 10px; }
+.analytics-podium { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; gap: 8px; margin-top: 16px; }
+.analytics-podium-person { display: flex; min-width: 0; flex-direction: column; align-items: center; justify-content: flex-start; gap: 5px; padding: 10px 5px 9px; border: 1px solid #e9e3d9; border-radius: 14px 14px 9px 9px; color: #47564a; background: #faf8f3; cursor: pointer; transition: border-color 140ms ease, background-color 140ms ease, transform 140ms ease; }
+.analytics-podium-person:hover { transform: translateY(-2px); }
+.analytics-podium-person:focus-visible { outline: 3px solid rgba(83, 129, 111, .32); outline-offset: 2px; }
+.analytics-podium-person.rank-1 { min-height: 150px; order: 2; }
+.analytics-podium-person.rank-2 { min-height: 132px; order: 1; }
+.analytics-podium-person.rank-3 { min-height: 116px; order: 3; }
+.analytics-podium-person.is-selected { border-color: #85a78b; background: #edf4ec; box-shadow: 0 0 0 2px #dceade; }
+.analytics-podium-rank { color: #8a9588; font: 700 18px/1 "Fredoka", sans-serif; }
+.analytics-podium-person.rank-1 .analytics-podium-rank { color: #b88437; }
+.analytics-podium-avatar { position: relative; display: grid; width: 48px; height: 48px; flex: 0 0 auto; place-items: center; overflow: hidden; border: 2px solid #fffdf9; border-radius: 50%; color: #fff; background: #86a68c; box-shadow: 0 1px 5px rgba(54, 48, 39, .14); font-size: 19px; font-weight: 800; }
+.analytics-podium-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.analytics-podium-person > strong { max-width: 100%; overflow: hidden; color: #465047; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.analytics-podium-person > small { color: #66806b; font-size: 11px; font-weight: 800; }
+.analytics-contribution-clear { padding: 5px 8px; border: 0; border-radius: 8px; color: #587564; background: #edf3ee; cursor: pointer; font: 700 10px "Nunito", sans-serif; white-space: nowrap; }
 .analytics-contribution-row { display: grid; grid-template-columns: 32px minmax(100px, .8fr) minmax(130px, 1fr) auto; align-items: center; column-gap: 15px; row-gap: 9px; min-height: 48px; border-top: 1px solid #f1eee8; }
 .analytics-contribution-row:first-child { border-top: 0; }
 .analytics-contribution-row > strong { color: #515b52; font-size: 12px; }
@@ -159,6 +174,11 @@
 :root[data-theme="dark"] .analytics-score-card > div:last-child strong, :root[data-theme="dark"] .analytics-score-ring strong { color: #b8d7be; }
 :root[data-theme="dark"] .analytics-bar-track, :root[data-theme="dark"] .analytics-target-track { background: #39433c; }
 :root[data-theme="dark"] .analytics-contribution-row { border-color: #3b453e; }
+:root[data-theme="dark"] .analytics-podium-person { border-color: #3c4840; color: #d8e0d9; background: #252e28; }
+:root[data-theme="dark"] .analytics-podium-person.is-selected { border-color: #85a78b; background: #35483b; box-shadow: 0 0 0 2px rgba(133, 167, 139, .2); }
+:root[data-theme="dark"] .analytics-podium-person > strong { color: #e4e8e2; }
+:root[data-theme="dark"] .analytics-podium-person > small { color: #b7d3bc; }
+:root[data-theme="dark"] .analytics-contribution-clear { color: #d4e1d5; background: #35483b; }
 :root[data-theme="dark"] .analytics-period > div { color: #c5dcc9; }
 :root[data-theme="dark"] .analytics-alert { border-color: #5a4d39; color: #e0c795; background: #373126; }
 :root[data-theme="dark"] .analytics-alert > span { background: #4b402f; }

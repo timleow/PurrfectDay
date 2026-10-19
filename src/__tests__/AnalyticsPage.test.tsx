@@ -28,6 +28,44 @@ describe("Analytics page", () => {
     expect(treatRow.textContent).toContain("3 treats");
   });
 
+  it("ranks the top three by share of care check-ins and filters the breakdown when selected", async () => {
+    const user = userEvent.setup();
+    const now = new Date().toISOString();
+    render(<AnalyticsPage
+      cats={[{ id: "cat-1", name: "Mochi", color: "#abc", initial: "M" }]}
+      logs={[
+        { id: "alex-treat-1", catId: "cat-1", metric: "treats", actorUserId: "alex-id", who: "Alex", what: "Dental treats", detail: "Added 1 treat", amountDelta: 1, timestamp: now },
+        { id: "alex-treat-2", catId: "cat-1", metric: "treats", actorUserId: "alex-id", who: "Alex", what: "Dental treats", detail: "Added 1 treat", amountDelta: 1, timestamp: now },
+        { id: "alex-kibble", catId: "cat-1", metric: "kibble", actorUserId: "alex-id", who: "Alex", what: "Kibble", detail: "Added 3 spoons", amountDelta: 3, timestamp: now },
+        { id: "sam-play", catId: "cat-1", metric: "played", actorUserId: "sam-id", who: "Sam", what: "Playtime", detail: "Added 5 sessions", amountDelta: 5, timestamp: now },
+        { id: "sam-water", catId: "cat-1", metric: "fountain", actorUserId: "sam-id", who: "Sam", what: "Water top-up", detail: "Added 1 time", amountDelta: 1, timestamp: now },
+        { id: "mina-poop", catId: "cat-1", metric: "pooped", actorUserId: "mina-id", who: "Mina", what: "Pooped", detail: "Added 1 time", amountDelta: 1, timestamp: now },
+      ]}
+      goals={{ "cat-1": { treatsGoal: 4, kibbleGoal: 3, cansGoal: 1 } }}
+      members={[
+        { user_id: "alex-id", display_name: "Alex", avatar_url: "https://example.com/alex.jpg" },
+        { user_id: "sam-id", display_name: "Sam", avatar_url: null },
+        { user_id: "mina-id", display_name: "Mina", avatar_url: null },
+      ]}
+      selectedCatId="cat-1"
+      timezone="UTC"
+    />);
+
+    const first = screen.getByRole("button", { name: /Show contributions for Alex, rank 1, 50%/ });
+    expect(first.querySelector("img")?.getAttribute("src")).toBe("https://example.com/alex.jpg");
+    expect(screen.getByRole("button", { name: /Show contributions for Sam, rank 2, 33%/ })).not.toBeNull();
+    expect(screen.getByRole("button", { name: /Show contributions for Mina, rank 3, 17%/ })).not.toBeNull();
+
+    await user.click(first);
+    expect(screen.getByText("Care breakdown for Alex")).not.toBeNull();
+    const contributionTable = document.querySelector(".analytics-contribution-list") as HTMLElement;
+    expect(within(contributionTable).getByText("Dental treats")).not.toBeNull();
+    expect(within(contributionTable).getByText("Kibble")).not.toBeNull();
+    expect(within(contributionTable).queryByText("Playtime")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Show everyone" }));
+    expect(screen.getByText("Share of logged care check-ins")).not.toBeNull();
+  });
+
   it("can compare all cats and switch the reporting range", async () => {
     const user = userEvent.setup();
     render(<AnalyticsPage cats={[{ id: "cat-1", name: "Mochi", color: "#abc", initial: "M" }]} logs={[]} goals={{}} selectedCatId="cat-1" timezone="UTC" />);

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import CareIcon, { type IconName } from "./CareIcon";
 import { addDateKeyDays, dateKeyInZone, startOfDayInZone } from "../data/dateWindows";
 import { getCareLogDelta, getLogMetric, metricLabels, metricUnits, removeUndoneCareLogs, type CareLog, type TrackableKey } from "../data/careLogBatching";
-import type { TargetRule } from "../data/familyService";
+import type { FamilyMember, TargetRule } from "../data/familyService";
 import type { OverviewCat } from "./CatsOverview";
 import "./AnalyticsPage.css";
 
@@ -35,11 +35,21 @@ function formatMetricAmount(metric: TrackableKey, amount: number) {
   return `${formatAmount(amount)} ${amount === 1 ? unit.replace(/s$/, "") : unit}`;
 }
 
-export default function AnalyticsPage({ cats, logs, goals, targets = [], timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", selectedCatId, initialRange }: {
+function ContributorAvatar({ name, photoUrl }: { name: string; photoUrl?: string | null }) {
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const failed = Boolean(photoUrl && failedUrl === photoUrl);
+  return <span aria-hidden="true" className="analytics-podium-avatar">
+    <span>{name.trim()[0]?.toUpperCase() || "?"}</span>
+    {photoUrl && !failed && <img alt="" loading="lazy" onError={() => setFailedUrl(photoUrl)} src={photoUrl} />}
+  </span>;
+}
+
+export default function AnalyticsPage({ cats, logs, goals, targets = [], members = [], timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", selectedCatId, initialRange }: {
   cats: OverviewCat[];
   logs: CareLog[];
   goals: Record<string, GoalValues>;
   targets?: TargetRule[];
+  members?: Array<Pick<FamilyMember, "user_id" | "display_name" | "avatar_url">>;
   timezone?: string;
   selectedCatId: number | string;
   initialRange?: Range;
@@ -51,6 +61,7 @@ export default function AnalyticsPage({ cats, logs, goals, targets = [], timezon
   const datePickerCloseTimer = useRef<number | undefined>(undefined);
   const [pickerMonth, setPickerMonth] = useState(() => dateKeyInZone(new Date(), timezone).slice(0, 7));
   const [catFilter, setCatFilter] = useState(selectedCatId === "" ? "all" : String(selectedCatId));
+  const [selectedContributorKey, setSelectedContributorKey] = useState<string | null>(null);
   const catSwipeStart = useRef<{ x: number; y: number } | null>(null);
   const ignoreNextCatClick = useRef(false);
   const handleCatPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -210,19 +221,45 @@ export default function AnalyticsPage({ cats, logs, goals, targets = [], timezon
     severity: "attention",
   });
   const contributions = activityMetrics.map((metric) => {
-    const byMember = new Map<string, { name: string; amount: number }>();
+    const byMember = new Map<string, { key: string; name: string; amount: number }>();
     activeLogs.forEach((entry) => {
       if (getLogMetric(entry) !== metric) return;
       const amount = Math.max(0, getCareLogDelta(entry) ?? (entry.detail === "Marked done" ? 1 : 0));
       if (amount <= 0) return;
       const key = entry.actorUserId ?? entry.who;
-      const current = byMember.get(key) ?? { name: entry.who, amount: 0 };
+      const familyMember = entry.actorUserId ? members.find((member) => member.user_id === entry.actorUserId) : undefined;
+      const current = byMember.get(key) ?? { key, name: familyMember?.display_name || entry.who, amount: 0 };
       current.amount += amount;
       byMember.set(key, current);
     });
     const leaders = [...byMember.values()].sort((left, right) => right.amount - left.amount);
     return { metric, leaders, total: leaders.reduce((sum, member) => sum + member.amount, 0) };
   }).filter((entry) => entry.total > 0);
+  const contributorTotals = new Map<string, { key: string; name: string; avatarUrl?: string | null; checkIns: number }>();
+  activeLogs.forEach((entry) => {
+    const amount = getCareLogDelta(entry) ?? (entry.detail === "Marked done" ? 1 : 0);
+    if (amount <= 0) return;
+    const key = entry.actorUserId ?? entry.who;
+    const familyMember = entry.actorUserId ? members.find((member) => member.user_id === entry.actorUserId) : undefined;
+    const current = contributorTotals.get(key) ?? {
+      key,
+      name: familyMember?.display_name || entry.who,
+      avatarUrl: familyMember?.avatar_url,
+      checkIns: 0,
+    };
+    // Count care entries instead of summing unlike units such as treats, spoons, and sessions.
+    current.checkIns += Math.max(1, entry.batchCount ?? 1);
+    contributorTotals.set(key, current);
+  });
+  const totalCheckIns = [...contributorTotals.values()].reduce((sum, member) => sum + member.checkIns, 0);
+  const podiumMembers = [...contributorTotals.values()]
+    .sort((left, right) => right.checkIns - left.checkIns || left.name.localeCompare(right.name))
+    .slice(0, 3)
+    .map((member) => ({ ...member, percentage: Math.round((member.checkIns / totalCheckIns) * 100) }));
+  const selectedContributor = selectedContributorKey ? contributorTotals.get(selectedContributorKey) : undefined;
+  const visibleContributions = selectedContributorKey
+    ? contributions.filter((entry) => entry.leaders.some((member) => member.key === selectedContributorKey))
+    : contributions;
   const dateFormat = (key: string, options: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat(undefined, { ...options, timeZone: "UTC" }).format(dateFromKey(key));
   const weekEndKey = addDateKeyDays(rangeStartKey, 6);
   const periodLabel = range === "day"
@@ -318,12 +355,24 @@ export default function AnalyticsPage({ cats, logs, goals, targets = [], timezon
       </section>
 
       <section className="analytics-card analytics-contributions">
-        <div className="analytics-card-heading"><div><span className="analytics-card-icon is-lilac"><CareIcon name="family" size={19} /></span><div><h2>Family contributions</h2><p>Who logged the most of each kind of care</p></div></div></div>
-        {contributions.length ? <div className="analytics-contribution-list">{contributions.map(({ metric, leaders, total }) => {
-          const topAmount = leaders[0].amount;
-          const topNames = leaders.filter((member) => member.amount === topAmount).map((member) => member.name);
-          return <div className="analytics-contribution-row" key={metric}><span className={`analytics-contribution-icon ${metric === "treats" ? "honey" : metric === "kibble" ? "blue" : metric === "cans" ? "green" : metric === "fountain" ? "aqua" : "lilac"}`}><CareIcon name={activityIcons[metric]} size={16} /></span><strong>{metricLabels[metric]}</strong><span>{topNames.join(" & ")} <small>{formatMetricAmount(metric, topAmount)}</small></span><small className="analytics-total">{formatMetricAmount(metric, total)} total</small></div>;
-        })}</div> : <p className="analytics-empty-copy">No care activities were logged during this period.</p>}
+        <div className="analytics-card-heading"><div><span className="analytics-card-icon is-lilac"><CareIcon name="family" size={19} /></span><div><h2>Family contributions</h2><p>{selectedContributor ? `Care breakdown for ${selectedContributor.name}` : "Share of logged care check-ins"}</p></div></div>{selectedContributor && <button className="analytics-contribution-clear" onClick={() => setSelectedContributorKey(null)} type="button">Show everyone</button>}</div>
+        {podiumMembers.length > 0 && <div aria-label="Top care contributors" className="analytics-podium">
+          {podiumMembers.map((member, index) => {
+            const rank = index + 1;
+            return <button aria-label={`Show contributions for ${member.name}, rank ${rank}, ${member.percentage}% of care check-ins`} aria-pressed={selectedContributorKey === member.key} className={`analytics-podium-person rank-${rank}${selectedContributorKey === member.key ? " is-selected" : ""}`} key={member.key} onClick={() => setSelectedContributorKey((selected) => selected === member.key ? null : member.key)} type="button">
+              <span className="analytics-podium-rank">{rank}</span>
+              <ContributorAvatar name={member.name} photoUrl={member.avatarUrl} />
+              <strong>{member.name}</strong>
+              <small>{member.percentage}%</small>
+            </button>;
+          })}
+        </div>}
+        {visibleContributions.length ? <div className="analytics-contribution-list">{visibleContributions.map(({ metric, leaders, total }) => {
+          const selectedAmount = selectedContributorKey ? leaders.find((member) => member.key === selectedContributorKey) : undefined;
+          const displayedAmount = selectedAmount?.amount ?? leaders[0].amount;
+          const displayedNames = selectedAmount ? [selectedAmount.name] : leaders.filter((member) => member.amount === displayedAmount).map((member) => member.name);
+          return <div className="analytics-contribution-row" key={metric}><span className={`analytics-contribution-icon ${metric === "treats" ? "honey" : metric === "kibble" ? "blue" : metric === "cans" ? "green" : metric === "fountain" ? "aqua" : "lilac"}`}><CareIcon name={activityIcons[metric]} size={16} /></span><strong>{metricLabels[metric]}</strong><span>{displayedNames.join(" & ")} <small>{formatMetricAmount(metric, displayedAmount)}</small></span><small className="analytics-total">{formatMetricAmount(metric, total)} total</small></div>;
+        })}</div> : <p className="analytics-empty-copy">{selectedContributor ? `${selectedContributor.name} has no care activities in this period.` : "No care activities were logged during this period."}</p>}
       </section>
 
       <section aria-label="Care that may need attention" className="analytics-card analytics-alerts">

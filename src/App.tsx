@@ -2225,7 +2225,7 @@ export default function App() {
         onSelect={(id) => { setSelectedId(id); navigateTo("care"); }}
         selectedId={selectedId}
       />}
-      {activeTab === "analytics" && <AnalyticsPage cats={cats} logs={careLogs} goals={Object.fromEntries(cats.map((cat) => { const current = { ...emptyTracker, ...(trackers[String(cat.id)] ?? {}) }; return [String(cat.id), { treatsGoal: current.treatsGoal, kibbleGoal: current.kibbleGoal, cansGoal: current.cansGoal }]; }))} targets={cloudTargets} selectedCatId={selectedId} timezone={cloudFamily?.timezone} initialRange={analyticsInitialRange} />}
+      {activeTab === "analytics" && <AnalyticsPage cats={cats} logs={careLogs} goals={Object.fromEntries(cats.map((cat) => { const current = { ...emptyTracker, ...(trackers[String(cat.id)] ?? {}) }; return [String(cat.id), { treatsGoal: current.treatsGoal, kibbleGoal: current.kibbleGoal, cansGoal: current.cansGoal }]; }))} targets={cloudTargets} members={cloudMembers} selectedCatId={selectedId} timezone={cloudFamily?.timezone} initialRange={analyticsInitialRange} />}
       {activeTab === "family" && <FamilyPortal cats={cats} initialFamily={cloudFamily ?? undefined} initialMembers={cloudFamily ? cloudMembers : undefined} initialSession={cloudSession} workspaceReady={!cloudWorkspaceLoading} onClose={() => { navigateTo(cloudFamily ? "care" : "cats"); setCloudRefreshTick((tick) => tick + 1); }} onManageCats={() => navigateTo("cats")} onSelectCat={(id) => { setSelectedId(id); navigateTo("care"); }} />}
       {pendingCatRemoval && <ConfirmDialog
         title={`Remove ${pendingCatRemoval.name}?`}
