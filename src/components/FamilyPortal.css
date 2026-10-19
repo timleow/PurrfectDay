@@ -1,6 +1,7 @@
 .family-portal-page {
   min-height: 100vh;
   padding: 18px 28px 112px;
+  background: var(--page-background);
 }
 
 .family-portal {

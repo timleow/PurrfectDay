@@ -2,9 +2,10 @@
 @import "tailwindcss";
 
 :root {
+  --page-background: #f8f6f0;
   font-family: "DM Sans", sans-serif;
   color: #29342f;
-  background: #f8f5ef;
+  background: var(--page-background);
   font-synthesis: none;
 }
 
@@ -16,6 +17,7 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  background: var(--page-background);
 }
 
 button,
@@ -44,6 +46,7 @@ a:focus-visible {
 
 .app-root {
   min-height: 100vh;
+  background: var(--page-background);
 }
 
 .app-shell {
@@ -335,6 +338,7 @@ main {
   grid-column: 2;
   min-width: 0;
   padding: 40px clamp(28px, 4vw, 64px) 108px;
+  background: var(--page-background);
 }
 
 .primary-nav {
@@ -1505,7 +1509,7 @@ h1 {
 
 @media (max-width: 640px) {
   :root {
-    background: #fffaf3;
+    background: var(--page-background);
   }
 
   main {
@@ -1669,6 +1673,7 @@ h1 {
   justify-content: flex-end;
   gap: 8px;
   padding: 10px max(14px, env(safe-area-inset-right));
+  background: var(--page-background);
 }
 .pull-refresh-indicator {
   position: fixed;
@@ -3101,16 +3106,18 @@ h1 {
 @keyframes track-picker-fall-out { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(8px); } }
 
 :root[data-theme="dark"] {
+  --page-background: #202722;
   color-scheme: dark;
   color: #e8e8e1;
-  background: #171b19;
+  background: var(--page-background);
 }
 
 :root[data-theme="dark"] body,
 :root[data-theme="dark"] main,
+:root[data-theme="dark"] .app-root,
 :root[data-theme="dark"] .app-shell {
   color: #e8e8e1;
-  background: #171b19;
+  background: var(--page-background);
 }
 
 :root[data-theme="dark"] .primary-nav {
@@ -3469,7 +3476,7 @@ h1 {
 
 @media (max-width: 640px) {
   :root[data-theme="dark"] {
-    background: #171b19;
+    background: var(--page-background);
   }
 }
 
