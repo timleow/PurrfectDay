@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
+import CareIcon, { type IconName } from "./components/CareIcon";
+import AnalyticsPage from "./components/AnalyticsPage";
 import FamilyPortal from "./components/FamilyPortal";
 import CatsOverview from "./components/CatsOverview";
 import ConfirmDialog from "./components/ConfirmDialog";
 import SignInScreen from "./components/SignInScreen";
 import { blobToDataUrl, compressCatPhoto, cropCatPhoto } from "./data/catPhoto";
 import { addDateKeyDays, dateKeyInZone, getFamilyCareWindow, startOfDayInZone } from "./data/dateWindows";
+import { batchCareLogs, getCareLogDelta, getLogMetric, metricLabels, metricUnits, removeUndoneCareLogs } from "./data/careLogBatching";
+import type { CareLog, TrackableKey } from "./data/careLogBatching";
 import { debounce } from "./data/debounce";
 import { clearWorkspaceCache, readWorkspaceCache, writeWorkspaceCache } from "./data/workspaceCache";
 import { canUndoCareAction, undoNumericDelta, undoWetFoodDelta } from "./data/undoCareAction";
@@ -30,33 +34,7 @@ import {
 } from "./data/familyService";
 import { isSupabaseConfigured, supabase } from "./data/supabase";
 
-type IconName =
-  | "bowl"
-  | "bell"
-  | "calendar"
-  | "check"
-  | "chevron"
-  | "drop"
-  | "ear"
-  | "edit"
-  | "family"
-  | "heart"
-  | "medical"
-  | "minus"
-  | "more"
-  | "moon"
-  | "paw"
-  | "play"
-  | "poop"
-  | "pee"
-  | "removePerson"
-  | "plus"
-  | "settings"
-  | "sparkle"
-  | "sun"
-  | "treat"
-  | "undo"
-  | "yarn";
+
 
 type Cat = {
   id: number | string;
@@ -75,37 +53,12 @@ type Tracker = {
   kibbleGoal: number;
   cansGoal: number;
   teethPawing: number;
-  fountain: boolean;
+  fountain: number;
   pooped: number;
   peed: number;
   ears: boolean;
   played: number;
   earsWeek: string;
-};
-
-type TrackableKey =
-  | "treats"
-  | "kibble"
-  | "cans"
-  | "teethPawing"
-  | "fountain"
-  | "pooped"
-  | "peed"
-  | "ears"
-  | "played";
-
-type CareLog = {
-  id: string;
-  catId: number | string;
-  metric?: TrackableKey;
-  actorUserId?: string;
-  who: string;
-  what: string;
-  detail: string;
-  timestamp: string;
-  amountDelta?: number;
-  batchCount?: number;
-  latestTimestamp?: string;
 };
 
 type PendingCareAction = {
@@ -118,19 +71,7 @@ type PendingCareAction = {
 };
 
 type FoodGoalKey = "treatsGoal" | "kibbleGoal" | "cansGoal";
-type UndoAction = { id: string; catId: number | string; metric: TrackableKey; amountDelta: number; actorUserId?: string; timestamp: number };
-
-const metricLabels: Record<TrackableKey, string> = {
-  treats: "Dental treats",
-  kibble: "Kibble",
-  cans: "Wet food",
-  teethPawing: "Pawing at teeth",
-  fountain: "Fountain top-up",
-  pooped: "Pooped",
-  peed: "Peed",
-  ears: "Ears cleaned",
-  played: "Playtime",
-};
+type UndoAction = { id: string; eventId: string; catId: number | string; metric: TrackableKey; amountDelta: number; actorUserId?: string; timestamp: number };
 
 const tileLabels: Record<TrackableKey, string> = {
   treats: "Treats",
@@ -154,6 +95,18 @@ const metricIcons: Record<TrackableKey, IconName> = {
   peed: "pee",
   ears: "ear",
   played: "yarn",
+};
+
+const metricColorClasses: Record<TrackableKey, string> = {
+  treats: "treat-green",
+  kibble: "kibble-brown",
+  cans: "wet-beige",
+  teethPawing: "berry",
+  fountain: "aqua",
+  pooped: "lilac",
+  peed: "blueberry",
+  ears: "peachy",
+  played: "purple",
 };
 
 const databaseMetrics: Record<TrackableKey, string> = {
@@ -197,7 +150,7 @@ function trackerFromCloud(catId: string, events: CareEvent[], targets: TargetRul
     kibbleGoal: goal("kibble", "daily", 3),
     cansGoal: goal("wet_food", "daily", 1),
     teethPawing: Math.max(0, sum("teeth_pawing", dayStart, tomorrow)),
-    fountain: sum("fountain", dayStart, tomorrow) > 0,
+    fountain: Math.max(0, sum("fountain", dayStart, tomorrow)),
     pooped: Math.max(0, sum("poop", dayStart, tomorrow)),
     peed: Math.max(0, sum("pee", dayStart, tomorrow)),
     ears: sum("ear_cleaning", weekStart, tomorrow) > 0,
@@ -222,6 +175,7 @@ function careLogsFromCloud(events: CareEvent[], members: FamilyMember[], userId:
       detail: event.detail,
       timestamp: event.occurred_at,
       amountDelta: Number(event.amount_delta),
+      reversesEventId: event.reverses_event_id,
     } satisfies CareLog];
   });
 }
@@ -232,15 +186,10 @@ function applyCareAction(tracker: Tracker, metric: TrackableKey, amountDelta: nu
     const cans = Math.floor(amount + 0.000001);
     return { ...tracker, cans, canProgress: Math.round((amount - cans) * 100) };
   }
-  if (metric === "fountain" || metric === "ears") {
+  if (metric === "ears") {
     return { ...tracker, [metric]: amountDelta > 0 };
   }
   return { ...tracker, [metric]: Math.max(0, Number(tracker[metric]) + amountDelta) };
-}
-
-function getLogMetric(entry: CareLog): TrackableKey {
-  if (entry.metric) return entry.metric;
-  return (Object.entries(metricLabels).find(([, label]) => label === entry.what)?.[0] as TrackableKey | undefined) ?? "fountain";
 }
 
 function conciseLogAction(detail: string) {
@@ -254,103 +203,6 @@ function conciseLogAction(detail: string) {
   if (completed) return `+${completed[1]}`;
   return detail;
 }
-
-function getCareLogDelta(entry: CareLog) {
-  if (entry.amountDelta !== undefined) return entry.amountDelta;
-  const match = entry.detail.match(/^(Added|Removed) (\d+(?:\.\d+)?)(%)?/);
-  if (!match) return undefined;
-  const metric = getLogMetric(entry);
-  const amount = Number(match[2]) / (metric === "cans" && match[3] === "%" ? 100 : 1);
-  return match[1] === "Removed" ? -amount : amount;
-}
-
-function batchCareLogs(logs: CareLog[]) {
-  const sortedLogs = [...logs].sort((left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime());
-  const groups: CareLog[][] = [];
-  const batchableAction = (entry: CareLog) => getCareLogDelta(entry) !== undefined;
-
-  for (const entry of sortedLogs) {
-    const metric = getLogMetric(entry);
-    const action = entry.detail.startsWith("Removed") ? "Removed" : "Added";
-    const group = batchableAction(entry) && entry.amountDelta !== undefined
-      ? groups.find((candidate) => {
-        const first = candidate[0];
-        return batchableAction(first)
-          && getLogMetric(first) === metric
-          && (first.actorUserId ?? first.who) === (entry.actorUserId ?? entry.who)
-          && (first.detail.startsWith("Removed") ? "Removed" : "Added") === action
-          && new Date(entry.timestamp).getTime() - new Date(first.timestamp).getTime() <= 5 * 60 * 1000;
-      })
-      : undefined;
-
-    if (group) group.push(entry);
-    else groups.push([entry]);
-  }
-
-  return groups.map((group) => {
-    const first = group[0];
-    const firstDelta = getCareLogDelta(first);
-    if (group.length === 1 || firstDelta === undefined) return first;
-
-    const metric = getLogMetric(first);
-    const action = first.detail.startsWith("Removed") ? "Removed" : "Added";
-    const totalDelta = group.reduce((total, entry) => total + (getCareLogDelta(entry) ?? 0), 0);
-    const amount = Math.abs(totalDelta);
-    const formattedAmount = Number(amount.toFixed(1));
-    const detail = metric === "cans"
-      ? `${action} ${Math.round(formattedAmount * 100)}% of a can`
-      : `${action} ${formattedAmount} ${formattedAmount === 1
-        ? ({ treats: "treat", kibble: "spoon", teethPawing: "time", played: "session" } as Partial<Record<TrackableKey, string>>)[metric] ?? metricUnits[metric] ?? "times"
-        : metricUnits[metric] ?? "times"}`;
-
-    return { ...first, detail, amountDelta: totalDelta, batchCount: group.length, latestTimestamp: group[group.length - 1].timestamp };
-  }).sort((left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime());
-}
-
-function removeUndoneCareLogs(logs: CareLog[]) {
-  const ordered = [...logs].sort((left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime());
-  const remaining: Array<{ entry: CareLog; delta: number }> = [];
-  for (const entry of ordered) {
-    const delta = getCareLogDelta(entry);
-    if (delta === undefined || delta >= 0) {
-      remaining.push({ entry, delta: delta ?? 0 });
-      continue;
-    }
-    let toUndo = Math.abs(delta);
-    const actor = entry.actorUserId ?? entry.who;
-    for (const candidate of remaining) {
-      if (toUndo <= 0.000001) break;
-      if (candidate.delta <= 0 || String(candidate.entry.catId) !== String(entry.catId) || getLogMetric(candidate.entry) !== getLogMetric(entry)) continue;
-      if ((candidate.entry.actorUserId ?? candidate.entry.who) !== actor) continue;
-      const canceled = Math.min(candidate.delta, toUndo);
-      candidate.delta -= canceled;
-      toUndo -= canceled;
-    }
-    if (toUndo > 0.000001) remaining.push({ entry, delta: -toUndo });
-  }
-  return remaining.flatMap(({ entry, delta }) => {
-    if (delta >= -0.000001 && delta <= 0.000001) return [];
-    if (delta > 0 && getCareLogDelta(entry) !== undefined && Math.abs(delta - (getCareLogDelta(entry) ?? 0)) > 0.000001) {
-      const amount = getLogMetric(entry) === "cans" ? `${Math.round(delta * 100)}% of a can` : `${Number(delta.toFixed(1))} ${metricUnits[getLogMetric(entry)] ?? "times"}`;
-      return [{ ...entry, amountDelta: delta, detail: `Added ${amount}` }];
-    }
-    if (delta < 0 && getCareLogDelta(entry) !== undefined && Math.abs(delta - (getCareLogDelta(entry) ?? 0)) > 0.000001) {
-      const amount = getLogMetric(entry) === "cans" ? `${Math.round(Math.abs(delta) * 100)}% of a can` : `${Number(Math.abs(delta).toFixed(1))} ${metricUnits[getLogMetric(entry)] ?? "times"}`;
-      return [{ ...entry, amountDelta: delta, detail: `Removed ${amount}` }];
-    }
-    return [entry];
-  });
-}
-
-const metricUnits: Partial<Record<TrackableKey, string>> = {
-  treats: "treats",
-  kibble: "spoons",
-  cans: "cans",
-  teethPawing: "times",
-  pooped: "times",
-  peed: "times",
-  played: "sessions",
-};
 
 const breakdownQuestions: Record<TrackableKey, string> = {
   treats: "Who fed?",
@@ -373,7 +225,7 @@ const emptyTracker: Tracker = {
   kibbleGoal: 3,
   cansGoal: 1,
   teethPawing: 0,
-  fountain: false,
+  fountain: 0,
   pooped: 0,
   peed: 0,
   ears: false,
@@ -396,6 +248,7 @@ function loadTrackers(saved: string | null): Record<string, Tracker> {
       {
         ...emptyTracker,
         ...tracker,
+        fountain: typeof tracker.fountain === "number" ? tracker.fountain : tracker.fountain ? 1 : 0,
         played: typeof tracker.played === "number" ? tracker.played : tracker.played ? 1 : 0,
         pooped: typeof tracker.pooped === "number" ? tracker.pooped : tracker.pooped ? 1 : 0,
         peed: typeof tracker.peed === "number" ? tracker.peed : tracker.peed ? 1 : 0,
@@ -405,122 +258,7 @@ function loadTrackers(saved: string | null): Record<string, Tracker> {
   );
 }
 
-function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
-  const paths: Record<IconName, React.ReactNode> = {
-    bell: <><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21h4" /></>,
-    bowl: (
-      <>
-        <path d="M4 10h16c-.45 5.4-3.1 8-8 8s-7.55-2.6-8-8Z" />
-        <path d="M7 7.5c1.4-1.5 2.7-1.5 4 0s2.6 1.5 4 0" />
-      </>
-    ),
-    calendar: (
-      <>
-        <rect x="4" y="5" width="16" height="15" rx="3" />
-        <path d="M8 3v4M16 3v4M4 10h16" />
-      </>
-    ),
-    check: <path d="m5 12 4 4L19 6" />,
-    chevron: <path d="m9 18 6-6-6-6" />,
-    drop: <path d="M12 3s6 6.6 6 11a6 6 0 0 1-12 0c0-4.4 6-11 6-11Z" />,
-    ear: (
-      <>
-        <path d="M6.2 5.7C8.3 2.2 14.8 2.1 17 6c2.1 3.8-.9 6.1-3 7.4-2.5 1.6-1.6 5.3-5.1 5.3-3.4 0-5.3-7.8-2.7-13Z" />
-        <path d="M9 8.3c1.5-1.5 4.5-1.4 5.4.6.8 1.7-1.2 2.5-2.3 3.2" />
-      </>
-    ),
-    edit: <><path d="m14.5 5.5 4 4M4 20l4.2-.9L19 7.3 16.7 5 5.9 15.8 4 20Z" /><path d="M13.8 6.2 17.8 10.2" /></>,
-    family: (
-      <>
-        <circle cx="9" cy="8" r="3" />
-        <path d="M3.5 20v-1.4a5.5 5.5 0 0 1 11 0V20M16 5.5a3 3 0 0 1 0 5.8M17 14.2a4.7 4.7 0 0 1 3.5 4.5V20" />
-      </>
-    ),
-    heart: <path d="M20.8 5.8c-2.4-2.4-6.3-1.8-8.8 1.1-2.5-2.9-6.4-3.5-8.8-1.1-2.7 2.7-1.4 7.3.9 9.6 2 2 7.9 5.6 7.9 5.6s5.9-3.6 7.9-5.6c2.3-2.3 3.6-6.9.9-9.6Z" />,
-    medical: (
-      <>
-        <rect x="5" y="3" width="14" height="18" rx="3" />
-        <path d="M9 3v4h6V3M9 13h6M12 10v6" />
-      </>
-    ),
-    minus: <path d="M6 12h12" />,
-    more: <>
-      <circle cx="12" cy="5" r="1.6" />
-      <circle cx="12" cy="12" r="1.6" />
-      <circle cx="12" cy="19" r="1.6" />
-    </>,
-    moon: <path d="M20.2 15.1A8.5 8.5 0 0 1 8.9 3.8 8.5 8.5 0 1 0 20.2 15.1Z" />,
-    poop: (
-      <>
-        <path d="M5 18.2c0-1.7 1.2-3 3-3.2-.7-2.1.4-4.3 2.6-4.8.3-2.4 1.5-4 3.4-4s3.1 1.6 3.4 4c2.1.5 3.2 2.7 2.5 4.8 1.8.2 3 1.5 3 3.2 0 1-.8 1.8-1.8 1.8H6.8c-1 0-1.8-.8-1.8-1.8Z" />
-        <path d="M9.4 17.2h.1m5 0h.1m-3.6 1.2c.7.6 1.4.6 2.1 0" />
-      </>
-    ),
-    pee: (
-      <>
-        <path d="M12 2.5s3.3 3.8 3.3 6.2a3.3 3.3 0 0 1-6.6 0c0-2.4 3.3-6.2 3.3-6.2Z" />
-        <path d="M5.3 12.8s2.3 2.7 2.3 4.4a2.3 2.3 0 0 1-4.6 0c0-1.7 2.3-4.4 2.3-4.4ZM18.7 12.8s2.3 2.7 2.3 4.4a2.3 2.3 0 0 1-4.6 0c0-1.7 2.3-4.4 2.3-4.4Z" />
-      </>
-    ),
-    removePerson: <><circle cx="9" cy="8" r="3" /><path d="M3.5 20v-1.4a5.5 5.5 0 0 1 11 0V20M17 10h5" /></>,
-    paw: (
-      <>
-        <ellipse cx="12" cy="15.5" rx="5.3" ry="4.2" />
-        <ellipse cx="5.7" cy="11" rx="2.1" ry="2.7" />
-        <ellipse cx="18.3" cy="11" rx="2.1" ry="2.7" />
-        <ellipse cx="9" cy="6.5" rx="2.1" ry="2.7" />
-        <ellipse cx="15" cy="6.5" rx="2.1" ry="2.7" />
-      </>
-    ),
-    play: <path d="m8 5 11 7-11 7V5Z" />,
-    plus: <path d="M12 5v14M5 12h14" />,
-    settings: (
-      <>
-        <path d="M4 7h10M18 7h2M4 17h2M10 17h10" />
-        <circle cx="16" cy="7" r="2" />
-        <circle cx="8" cy="17" r="2" />
-      </>
-    ),
-    sparkle: (
-      <>
-        <path d="M12 3c.7 4.8 3.2 7.3 8 8-4.8.7-7.3 3.2-8 8-.7-4.8-3.2-7.3-8-8 4.8-.7 7.3-3.2 8-8Z" />
-        <path d="M19 2v4M17 4h4" />
-      </>
-    ),
-    sun: (
-      <>
-        <circle cx="12" cy="12" r="4" />
-        <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
-      </>
-    ),
-    treat: (
-      <>
-        <path d="m7 8-3-2v6l3-2M17 8l3-2v6l-3-2" />
-        <rect x="7" y="6" width="10" height="8" rx="3" />
-      </>
-    ),
-    undo: <path d="M9 14 4 9l5-5M4 9h9a7 7 0 0 1 0 14h-2" />,
-    yarn: (
-      <>
-        <circle cx="10.5" cy="12.5" r="6.5" />
-        <path d="M5 9.2c2.1 1.5 5.8 1.7 10.8-.1M4.1 12.3c3.7-1.9 8.7-1.8 12.7.2M4.7 15.1c3.4-1.9 7.4-1.7 10.5.1M8.6 6.4c-.3 4.1 1.1 7.5 4.6 11.4M15.7 17.5c2.3-.2 3.7.2 4.4 1.3.7 1-.3 2.5-1.5 2" />
-      </>
-    ),
-  };
-
-  return (
-    <svg
-      aria-hidden="true"
-      className="icon"
-      fill="none"
-      height={size}
-      viewBox="0 0 24 24"
-      width={size}
-    >
-      {paths[name]}
-    </svg>
-  );
-}
+const Icon = CareIcon;
 
 function CatAvatar({
   cat,
@@ -766,7 +504,7 @@ function CareLogPanel({
         <ol className="activity-log-list">
           {visibleLogs.map((entry) => (
             <li key={entry.id}>
-              <span className={`activity-log-dot metric-${getLogMetric(entry)}`}><Icon name={metricIcons[getLogMetric(entry)]} size={13} /></span>
+              <span className={`activity-log-dot ${metricColorClasses[getLogMetric(entry)]} metric-${getLogMetric(entry)}`}><Icon name={metricIcons[getLogMetric(entry)]} size={13} /></span>
               <div><strong>{tileLabels[getLogMetric(entry)]}</strong><small>{conciseLogAction(entry.detail)} · by {entry.who}</small></div>
               <time dateTime={entry.timestamp}>{dateTimeFormat.format(new Date(entry.timestamp))}</time>
             </li>
@@ -876,6 +614,31 @@ function playCareSound(kind: "peed" | "pooped") {
   window.setTimeout(() => void context.close(), 700);
 }
 
+function useExitAnimation(open: boolean, onClose: () => void) {
+  const [closing, setClosing] = useState(false);
+  const timer = useRef<number | undefined>(undefined);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    if (!open) setClosing(false);
+  }, [open]);
+  useEffect(() => () => {
+    if (timer.current !== undefined) window.clearTimeout(timer.current);
+  }, []);
+
+  const dismiss = (afterClose?: () => void) => {
+    if (!open || closing || timer.current !== undefined) return;
+    setClosing(true);
+    timer.current = window.setTimeout(() => {
+      onCloseRef.current();
+      afterClose?.();
+      timer.current = undefined;
+    }, 220);
+  };
+  return { closing, dismiss };
+}
+
 export default function App() {
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     const saved = localStorage.getItem("purrfect-theme");
@@ -891,7 +654,7 @@ export default function App() {
   const [showAddCat, setShowAddCat] = useState(false);
   const [addCatBusy, setAddCatBusy] = useState(false);
   const addCatBusyRef = useRef(false);
-  const [activeTab, setActiveTab] = useState<"care" | "cats" | "family">("care");
+  const [activeTab, setActiveTab] = useState<"care" | "cats" | "analytics" | "family">("care");
   const [showQuotas, setShowQuotas] = useState(false);
   const [goalDrafts, setGoalDrafts] = useState<Record<FoodGoalKey, string>>({ treatsGoal: "4", kibbleGoal: "3", cansGoal: "1" });
   const [profileEditCatId, setProfileEditCatId] = useState<number | string | null>(null);
@@ -921,6 +684,7 @@ export default function App() {
   const [cloudMembers, setCloudMembers] = useState<FamilyMember[]>([]);
   const [cloudEvents, setCloudEvents] = useState<CareEvent[]>([]);
   const pendingCareActions = useRef(new Map<string, PendingCareAction>());
+  const pendingCareEventWrites = useRef(new Map<string, Promise<void>>());
   const cachedUserId = useRef<string | null>(null);
   const [cloudTargets, setCloudTargets] = useState<TargetRule[]>([]);
   const [cloudError, setCloudError] = useState("");
@@ -948,6 +712,11 @@ export default function App() {
   const pullArmed = useRef(false);
   const catSwipeStart = useRef<{ x: number; y: number } | null>(null);
   const ignoreNextCatTap = useRef(false);
+  const addCatExit = useExitAnimation(showAddCat, () => setShowAddCat(false));
+  const quotasExit = useExitAnimation(showQuotas, () => setShowQuotas(false));
+  const profileExit = useExitAnimation(profileEditCatId !== null, () => setProfileEditCatId(null));
+  const notificationsExit = useExitAnimation(showNotifications, () => setShowNotifications(false));
+  const trackPickerExit = useExitAnimation(showTrackPicker, () => setShowTrackPicker(false));
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -955,11 +724,11 @@ export default function App() {
   }, [theme]);
 
   useEffect(() => {
-    setShowAddCat(false);
-    setShowQuotas(false);
-    setProfileEditCatId(null);
-    setShowNotifications(false);
-    setShowTrackPicker(false);
+    addCatExit.dismiss();
+    quotasExit.dismiss();
+    profileExit.dismiss();
+    notificationsExit.dismiss();
+    trackPickerExit.dismiss();
     setShowBreakdown(false);
     setPendingCatRemoval(null);
   }, [activeTab]);
@@ -1082,22 +851,46 @@ export default function App() {
     }))
     .slice(0, 30);
   const unreadNotificationCount = notificationEntries.filter((entry) => new Date(entry.latestTimestamp ?? entry.timestamp).getTime() > notificationsSeenAt).length;
+  const notificationTimezone = cloudFamily?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const todayNotificationKey = dateKeyInZone(new Date(), notificationTimezone);
+  const yesterdayNotificationKey = addDateKeyDays(todayNotificationKey, -1);
+  const notificationSections = notificationEntries.slice(0, 12).reduce<Array<{ key: string; label: string; entries: CareLog[] }>>((sections, entry) => {
+    const key = dateKeyInZone(new Date(entry.timestamp), notificationTimezone);
+    let section = sections.find((candidate) => candidate.key === key);
+    if (!section) {
+      const label = key === todayNotificationKey
+        ? "Today"
+        : key === yesterdayNotificationKey
+          ? "Yesterday"
+          : new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric", timeZone: notificationTimezone }).format(new Date(entry.timestamp));
+      section = { key, label, entries: [] };
+      sections.push(section);
+    }
+    section.entries.push(entry);
+    return sections;
+  }, []);
   const notificationCenter = (
     <div className="notification-center">
       <button aria-expanded={showNotifications} aria-label="Care notifications" className="notification-trigger" onClick={() => {
-        const opening = !showNotifications;
-        setShowNotifications(opening);
-        if (opening) localStorage.setItem(notificationReadKey, String(Date.now()));
+        if (showNotifications) notificationsExit.dismiss();
+        else {
+          setShowNotifications(true);
+          localStorage.setItem(notificationReadKey, String(Date.now()));
+        }
       }} type="button">
         <Icon name="bell" size={16} />
         {unreadNotificationCount > 0 && <span className="notification-badge">{unreadNotificationCount > 9 ? "9+" : unreadNotificationCount}</span>}
       </button>
-      {showNotifications && <section aria-label="Recent care activity" className="notification-popover" role="dialog">
-        <header><div><small>Family updates</small><h2>Recent care</h2></div><button aria-label="Close notifications" onClick={() => setShowNotifications(false)} type="button">×</button></header>
-        {notificationEntries.length ? <ol>{notificationEntries.slice(0, 12).map((entry) => {
-          const catName = cats.find((cat) => String(cat.id) === String(entry.catId))?.name ?? "Cat";
-          return <li key={entry.id}><button onClick={() => { setSelectedId(entry.catId); setActiveTab("care"); setShowNotifications(false); }} type="button"><span className={`notification-icon ${entry.metric ?? ""}`}><Icon name={metricIcons[entry.metric ?? "treats"]} size={15} /></span><span className="notification-copy"><strong>{entry.who} · {catName}</strong><small>{entry.detail}</small></span><time dateTime={entry.timestamp}>{new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(entry.timestamp))}</time></button></li>;
-        })}</ol> : <p className="notification-empty">Care check-ins from your family will show here.</p>}
+      {(showNotifications || notificationsExit.closing) && <section aria-label="Recent care activity" className={`notification-popover${notificationsExit.closing ? " is-closing" : ""}`} role="dialog">
+        <header><div><small>Family updates</small><h2>Recent care</h2></div><button aria-label="Close notifications" onClick={() => notificationsExit.dismiss()} type="button">×</button></header>
+        {notificationEntries.length ? notificationSections.map((section) => <section className="notification-day" key={section.key} aria-label={section.label}>
+          <h3>{section.label}</h3>
+          <ol>{section.entries.map((entry) => {
+            const metric = getLogMetric(entry);
+            const catName = cats.find((cat) => String(cat.id) === String(entry.catId))?.name ?? "Cat";
+            return <li key={entry.id}><button onClick={() => { setSelectedId(entry.catId); navigateTo("care"); notificationsExit.dismiss(); }} type="button"><span className={`notification-icon ${metricColorClasses[metric]}`}><Icon name={metricIcons[metric]} size={15} /></span><span className="notification-copy"><strong>{entry.who} · {catName}</strong><small>{entry.detail}</small></span><time dateTime={entry.timestamp}>{new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit", timeZone: notificationTimezone }).format(new Date(entry.timestamp))}</time></button></li>;
+          })}</ol>
+        </section>) : <p className="notification-empty">Care check-ins from your family will show here.</p>}
         {unreadNotificationCount > 0 && <footer>{unreadNotificationCount} new {unreadNotificationCount === 1 ? "update" : "updates"}</footer>}
       </section>}
     </div>
@@ -1108,15 +901,20 @@ export default function App() {
   }, [activeMetric]);
 
   useEffect(() => {
-    if (!showTrackPicker) return;
+    if (!showTrackPicker || trackPickerExit.closing) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setShowTrackPicker(false);
+      if (event.key === "Escape") trackPickerExit.dismiss();
     };
     document.addEventListener("keydown", closeOnEscape);
     return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [showTrackPicker]);
+  }, [showTrackPicker, trackPickerExit.closing]);
 
-  const returnToCare = () => setActiveTab("care");
+  const navigateTo = (nextTab: "care" | "cats" | "analytics" | "family") => {
+    if (nextTab === activeTab) return;
+    setActiveTab(nextTab);
+  };
+
+  const returnToCare = () => navigateTo("care");
 
   const selectedCat = cats.find((cat) => cat.id === selectedId) ?? cats[0] ?? { id: "", name: "Your cat", color: "#79B8A9", initial: "?" };
   const savedTracker = { ...emptyTracker, ...(trackers[selectedId] ?? {}) };
@@ -1364,11 +1162,12 @@ export default function App() {
     };
   }, [cloudFamily?.id]);
 
-  const addCareLog = (key: TrackableKey, detail: string, amountDelta?: number) => {
+  const addCareLog = (key: TrackableKey, detail: string, amountDelta?: number, reversesEventId?: string) => {
     const who = cloudFamily && cloudSession
       ? cloudMembers.find((member) => member.user_id === cloudSession.user.id)?.display_name || cloudSession.user.email?.split("@")[0] || "Family member"
       : memberName.trim() || "Family member";
     const timestamp = new Date().toISOString();
+    const eventId = crypto.randomUUID();
     if (cloudFamily && selectedCat && typeof selectedCat.id === "string") {
       if (cloudSession) clearWorkspaceCache(cloudSession.user.id);
       const inferredDelta = amountDelta ?? (detail === "Marked done" ? 1 : detail === "Undid this check-in" ? -1 : 1);
@@ -1380,15 +1179,20 @@ export default function App() {
         timestamp,
       };
       pendingCareActions.current.set(pendingAction.id, pendingAction);
-      void recordCareEvent({
-        family_id: cloudFamily.id,
-        cat_id: selectedCat.id,
-        metric: databaseMetrics[key],
-        amount_delta: inferredDelta,
-        unit: metricUnits[key] ?? "times",
-        detail,
-        occurred_at: timestamp,
-      }).then((event) => {
+      const pendingWrite = (async () => {
+        const originalWrite = reversesEventId ? pendingCareEventWrites.current.get(reversesEventId) : undefined;
+        if (originalWrite) await originalWrite;
+        const event = await recordCareEvent({
+          id: eventId,
+          family_id: cloudFamily.id,
+          cat_id: selectedCat.id as string,
+          metric: databaseMetrics[key],
+          amount_delta: inferredDelta,
+          unit: metricUnits[key] ?? "times",
+          detail,
+          occurred_at: timestamp,
+          reverses_event_id: reversesEventId ?? null,
+        });
         const savedAction = pendingCareActions.current.get(pendingAction.id);
         if (savedAction) savedAction.eventId = event.id;
         const entry: CareLog = {
@@ -1401,10 +1205,13 @@ export default function App() {
           detail: event.detail,
           timestamp: event.occurred_at,
           amountDelta: Number(event.amount_delta),
+          reversesEventId: event.reverses_event_id,
         };
         setCloudEvents((current) => [event, ...current].slice(0, 500));
         setCareLogs((current) => [entry, ...current].slice(0, 500));
-      }).catch((cause: unknown) => {
+      })();
+      pendingCareEventWrites.current.set(eventId, pendingWrite);
+      void pendingWrite.catch((cause: unknown) => {
         pendingCareActions.current.delete(pendingAction.id);
         setTrackers((current) => {
           const latest = { ...emptyTracker, ...(current[pendingAction.catId] ?? {}) };
@@ -1413,11 +1220,14 @@ export default function App() {
         setCloudError(cause instanceof Error ? cause.message : "Could not save that care entry.");
         setCloudRefreshTick((tick) => tick + 1);
       });
-      return;
+      void pendingWrite.then(() => {
+        if (pendingCareEventWrites.current.get(eventId) === pendingWrite) pendingCareEventWrites.current.delete(eventId);
+      }, () => undefined);
+      return eventId;
     }
     setCareLogs((current) => [
       {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        id: eventId,
         catId: selectedId,
         metric: key,
         who,
@@ -1425,14 +1235,16 @@ export default function App() {
         detail,
         timestamp,
         amountDelta: amountDelta ?? (detail === "Marked done" ? 1 : detail === "Undid this check-in" ? -1 : undefined),
+        reversesEventId,
       },
       ...current,
     ].slice(0, 500));
+    return eventId;
   };
 
-  const queueUndoAction = (catId: number | string, metric: TrackableKey, amountDelta: number) => {
+  const queueUndoAction = (catId: number | string, metric: TrackableKey, amountDelta: number, eventId: string) => {
     const timestamp = Date.now();
-    const action: UndoAction = { id: crypto.randomUUID(), catId, metric, amountDelta, actorUserId: cloudSession?.user.id, timestamp };
+    const action: UndoAction = { id: crypto.randomUUID(), eventId, catId, metric, amountDelta, actorUserId: cloudSession?.user.id, timestamp };
     setUndoActions((current) => [...current.filter((entry) => timestamp - entry.timestamp < 15000), action]);
     setUndoRevealUntil(timestamp + 10000);
     setUndoNow(timestamp);
@@ -1463,12 +1275,13 @@ export default function App() {
         const difference = Math.abs(amountDelta);
         const unit = metricUnits[metricKey] ?? "";
         const displayUnit = difference === 1 ? unit.replace(/s$/, "") : unit;
-        addCareLog(metricKey, `${amountDelta > 0 ? "Added" : "Removed"} ${difference}${displayUnit ? ` ${displayUnit}` : ""}`, amountDelta);
+        const eventId = addCareLog(metricKey, `${amountDelta > 0 ? "Added" : "Removed"} ${difference}${displayUnit ? ` ${displayUnit}` : ""}`, amountDelta);
+        queueUndoAction(selectedId, metricKey, amountDelta, eventId);
       } else if (typeof previous === "boolean" && typeof value === "boolean" && previous !== value) {
         amountDelta = value ? 1 : -1;
-        addCareLog(metricKey, value ? "Marked done" : "Undid this check-in", amountDelta);
+        const eventId = addCareLog(metricKey, value ? "Marked done" : "Undid this check-in", amountDelta);
+        queueUndoAction(selectedId, metricKey, amountDelta, eventId);
       }
-      if (amountDelta !== 0) queueUndoAction(selectedId, metricKey, amountDelta);
     }
     setTrackers((current) => ({
       ...current,
@@ -1495,7 +1308,7 @@ export default function App() {
       const value = Number(goalDrafts[key]);
       if (Number.isFinite(value) && value > 0 && value !== tracker[key]) update(key, value);
     });
-    setShowQuotas(false);
+    quotasExit.dismiss();
   };
 
   const completed = useMemo(() => {
@@ -1503,7 +1316,7 @@ export default function App() {
       tracker.treats >= tracker.treatsGoal,
       tracker.kibble >= tracker.kibbleGoal,
       tracker.cans >= tracker.cansGoal,
-      tracker.fountain,
+      tracker.fountain > 0,
       tracker.pooped,
       tracker.peed,
       tracker.played > 0,
@@ -1548,7 +1361,7 @@ export default function App() {
         setNewCatPhotoPosition({ x: 50, y: 50 });
         setNewCatPhotoZoom(1);
         setPhotoError("");
-        setShowAddCat(false);
+        addCatExit.dismiss();
       } catch (cause) {
         setCloudError(cause instanceof Error ? cause.message : "Could not add that cat to the family.");
       }
@@ -1568,7 +1381,7 @@ export default function App() {
     setNewCatPhotoPosition({ x: 50, y: 50 });
     setNewCatPhotoZoom(1);
     setPhotoError("");
-    setShowAddCat(false);
+    addCatExit.dismiss();
     } finally {
       addCatBusyRef.current = false;
       setAddCatBusy(false);
@@ -1647,7 +1460,7 @@ export default function App() {
       setCats((current) => current.map((entry) => entry.id === cat.id ? { ...entry, name, initial: name[0]?.toUpperCase() ?? "?", photo: nextPhoto } : entry));
       setTrackers((current) => ({ ...current, [String(cat.id)]: { ...emptyTracker, ...(current[String(cat.id)] ?? {}), ...nextGoals } }));
       setCloudError("");
-      setProfileEditCatId(null);
+      profileExit.dismiss();
     } catch (cause) {
       const message = errorMessage(cause, "Could not save this cat profile.");
       setPhotoError(message);
@@ -1792,8 +1605,8 @@ export default function App() {
   const handleBigTap = () => {
     if (activeMetric === "cans") {
       const amountDelta = 0.1;
-      queueUndoAction(selectedId, "cans", amountDelta);
-      addCareLog("cans", "Added 10% of a can", amountDelta);
+      const eventId = addCareLog("cans", "Added 10% of a can", amountDelta);
+      queueUndoAction(selectedId, "cans", amountDelta, eventId);
       setTrackers((current) => ({
         ...current,
         [selectedId]: (() => {
@@ -1809,8 +1622,8 @@ export default function App() {
     } else if (typeof activeValue === "number") {
       const unit = metricUnits[activeMetric] ?? "";
       const displayUnit = unit.replace(/s$/, "");
-      queueUndoAction(selectedId, activeMetric, 1);
-      addCareLog(activeMetric, `Added 1${displayUnit ? ` ${displayUnit}` : ""}`, 1);
+      const eventId = addCareLog(activeMetric, `Added 1${displayUnit ? ` ${displayUnit}` : ""}`, 1);
+      queueUndoAction(selectedId, activeMetric, 1, eventId);
       setTrackers((current) => {
         const latest = { ...emptyTracker, ...(current[selectedId] ?? {}) };
         return { ...current, [selectedId]: { ...latest, [activeMetric]: Number(latest[activeMetric]) + 1 } };
@@ -1839,7 +1652,7 @@ export default function App() {
       }));
       const reverseDetail = amountDelta > 0 ? "Removed" : "Added";
       const reverseAmount = Math.abs(amountDelta);
-      addCareLog("cans", `${reverseDetail} ${reverseAmount === 0.1 ? "10% of a can" : `${reverseAmount} cans`}`, -amountDelta);
+      addCareLog("cans", `${reverseDetail} ${reverseAmount === 0.1 ? "10% of a can" : `${reverseAmount} cans`}`, -amountDelta, action.eventId);
       return;
     }
     const unit = metricUnits[action.metric] ?? "";
@@ -1852,7 +1665,7 @@ export default function App() {
         const latest = { ...emptyTracker, ...(current[String(action.catId)] ?? {}) };
         return { ...current, [action.catId]: { ...latest, [action.metric]: !currentValue } };
       });
-      addCareLog(action.metric, amountDelta > 0 ? "Undid this check-in" : "Marked done", -amountDelta);
+      addCareLog(action.metric, amountDelta > 0 ? "Undid this check-in" : "Marked done", -amountDelta, action.eventId);
       return;
     }
     if (typeof currentValue !== "number") return;
@@ -1861,7 +1674,7 @@ export default function App() {
       return { ...current, [action.catId]: { ...latest, [action.metric]: undoNumericDelta(latest[action.metric] as number, amountDelta) } };
     });
     const reverseVerb = amountDelta > 0 ? "Removed" : "Added";
-    addCareLog(action.metric, `${reverseVerb} ${amountText}${displayUnit ? ` ${displayUnit}` : ""}`, -amountDelta);
+    addCareLog(action.metric, `${reverseVerb} ${amountText}${displayUnit ? ` ${displayUnit}` : ""}`, -amountDelta, action.eventId);
   };
 
   if (isSupabaseConfigured && (!cloudSession || authLoading)) {
@@ -1873,7 +1686,7 @@ export default function App() {
 
   return (
     <div className="app-root">
-      {(pullGestureActive || pullRefreshing) && <div className="pull-refresh-indicator" role="status"><span />{pullRefreshing ? "Refreshing…" : "Release to refresh"}</div>}
+      {(pullGestureActive || pullRefreshing) && <div className={`pull-refresh-indicator${pullRefreshing ? " is-refreshing" : ""}`} role="status"><span />{pullRefreshing ? "Refreshing…" : "Release to refresh"}</div>}
       <div className="app-utility-bar">{notificationCenter}{themeToggle}</div>
       <div className={`app-shell ${activeTab !== "care" || cats.length === 0 ? "family-route-hidden" : ""}`}>
       <aside className="sidebar">
@@ -1944,7 +1757,7 @@ export default function App() {
           </div>
 
           <div className="mobile-progress-card">
-            <span><Icon name="heart" size={17} /></span>
+            <button aria-label="Open care menu" className="mobile-progress-heart" onClick={() => setShowTrackPicker(true)} type="button"><Icon name="heart" size={17} /></button>
             <div>
               <strong>{completed === 7 ? "All cared for!" : `${completed} of 7 daily cares`}</strong>
               <div className="mobile-progress-track">
@@ -2097,9 +1910,9 @@ export default function App() {
                 : "Tap the big card whenever it happens"}
           </p>
           {careWarning && <p className="care-limit-warning" role="status">{careWarning}</p>}
-          {showTrackPicker && <div className="track-picker-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowTrackPicker(false); }}>
-            <section aria-labelledby="track-picker-title" aria-modal="true" className="track-picker-dialog" role="dialog">
-              <header><div><span>Care tracker</span><h2 id="track-picker-title">What would you like to track?</h2></div><button aria-label="Close tracking options" onClick={() => setShowTrackPicker(false)} type="button">×</button></header>
+          {(showTrackPicker || trackPickerExit.closing) && <div className={`track-picker-backdrop${trackPickerExit.closing ? " is-closing" : ""}`} onMouseDown={(event) => { if (event.target === event.currentTarget) trackPickerExit.dismiss(); }}>
+            <section aria-labelledby="track-picker-title" aria-modal="true" className={`track-picker-dialog${trackPickerExit.closing ? " is-closing" : ""}`} role="dialog">
+              <header><div><span>Care tracker</span><h2 id="track-picker-title">What would you like to track?</h2></div><button aria-label="Close tracking options" onClick={() => trackPickerExit.dismiss()} type="button">×</button></header>
               <div className="mobile-item-grid">
                 {mobileMetrics.map((item) => {
                   const value = tracker[item.key];
@@ -2112,7 +1925,7 @@ export default function App() {
                       setActiveMetric(item.key);
                       setTapBurst(0);
                       setShowBreakdown(false);
-                      setShowTrackPicker(false);
+                      trackPickerExit.dismiss();
                     }}
                     type="button"
                   >
@@ -2181,8 +1994,8 @@ export default function App() {
               </div>
               <div className="tracker-row">
                 <span className="item-icon aqua"><Icon name="drop" size={19} /></span>
-                <div className="tracker-label"><strong>Fountain topped up</strong><small>fresh & flowing</small></div>
-                <Toggle active={tracker.fountain} onClick={() => update("fountain", !tracker.fountain)} label={tracker.fountain ? "Done" : "Not yet"} />
+                <div className="tracker-label"><strong>Water topped up</strong><small>fresh & flowing</small></div>
+                <Stepper value={tracker.fountain} onChange={(value) => update("fountain", value)} accent="#428C9F" label="water top-ups" />
               </div>
             </div>
           </article>
@@ -2237,9 +2050,9 @@ export default function App() {
       </main>
       </div>
 
-      {showAddCat && (
-        <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !addCatBusy) setShowAddCat(false); }}>
-          <form aria-labelledby="add-cat-title" aria-modal="true" className="modal" onSubmit={addCat} onMouseDown={(event) => event.stopPropagation()} role="dialog">
+      {(showAddCat || addCatExit.closing) && (
+        <div className={`modal-backdrop${addCatExit.closing ? " is-closing" : ""}`} onMouseDown={(event) => { if (event.target === event.currentTarget && !addCatBusy) addCatExit.dismiss(); }}>
+          <form aria-labelledby="add-cat-title" aria-modal="true" className={`modal${addCatExit.closing ? " is-closing" : ""}`} onSubmit={addCat} onMouseDown={(event) => event.stopPropagation()} role="dialog">
             <span className="modal-icon"><Icon name="paw" size={24} /></span>
             <h2 id="add-cat-title">Add a new cat</h2>
             <p>Who’s joining the family?</p>
@@ -2284,18 +2097,18 @@ export default function App() {
             )}
             {photoError && <small className="photo-error">{photoError}</small>}
             <div className="modal-actions">
-              <button disabled={addCatBusy} type="button" onClick={() => { setShowAddCat(false); setNewCatPhoto(undefined); setNewCatPhotoPosition({ x: 50, y: 50 }); setNewCatPhotoZoom(1); setPhotoError(""); }}>Cancel</button>
+              <button disabled={addCatBusy || addCatExit.closing} type="button" onClick={() => addCatExit.dismiss(() => { setNewCatPhoto(undefined); setNewCatPhotoPosition({ x: 50, y: 50 }); setNewCatPhotoZoom(1); setPhotoError(""); })}>Cancel</button>
               <button type="submit" disabled={addCatBusy || !newCatName.trim()}>{addCatBusy ? <><span className="button-spinner" /> Adding…</> : <><Icon name="plus" size={17} /> Add cat</>}</button>
             </div>
           </form>
         </div>
       )}
 
-      {profileEditCatId !== null && (() => {
+      {(profileEditCatId !== null || profileExit.closing) && (() => {
         const cat = cats.find((entry) => String(entry.id) === String(profileEditCatId));
         if (!cat) return null;
-        return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !profileSaving && !profilePhotoLoading) setProfileEditCatId(null); }}>
-          <form aria-labelledby="edit-cat-profile-title" aria-modal="true" className="modal cat-profile-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={(event) => void saveCatProfile(event)} role="dialog">
+        return <div className={`modal-backdrop${profileExit.closing ? " is-closing" : ""}`} onMouseDown={(event) => { if (event.target === event.currentTarget && !profileSaving && !profilePhotoLoading) profileExit.dismiss(); }}>
+          <form aria-labelledby="edit-cat-profile-title" aria-modal="true" className={`modal cat-profile-modal${profileExit.closing ? " is-closing" : ""}`} onMouseDown={(event) => event.stopPropagation()} onSubmit={(event) => void saveCatProfile(event)} role="dialog">
             <span className="modal-icon"><Icon name="paw" size={24} /></span>
             <h2 id="edit-cat-profile-title">Edit {cat.name}</h2>
             <p>Update {cat.name}’s profile and daily food goals.</p>
@@ -2321,14 +2134,14 @@ export default function App() {
               <label><span><Icon name="medical" size={18} /> Wet food <small>cans</small></span><input aria-label="Wet food goal" inputMode="numeric" min="1" onChange={(event) => setProfileGoalDrafts((current) => ({ ...current, cansGoal: event.target.value }))} type="number" value={profileGoalDrafts.cansGoal} /></label>
             </div></div>
             {photoError && <small className="photo-error">{photoError}</small>}
-            <div className="modal-actions"><button disabled={profileSaving || profilePhotoLoading} onClick={() => setProfileEditCatId(null)} type="button">Cancel</button><button disabled={profileSaving || profilePhotoLoading || !profileNameDraft.trim()} type="submit">{profileSaving ? <><span className="button-spinner" /> Saving…</> : "Save profile"}</button></div>
+            <div className="modal-actions"><button disabled={profileSaving || profilePhotoLoading || profileExit.closing} onClick={() => profileExit.dismiss()} type="button">Cancel</button><button disabled={profileSaving || profilePhotoLoading || profileExit.closing || !profileNameDraft.trim()} type="submit">{profileSaving ? <><span className="button-spinner" /> Saving…</> : "Save profile"}</button></div>
           </form>
         </div>;
       })()}
 
-      {showQuotas && (
-        <div className="modal-backdrop" onMouseDown={() => setShowQuotas(false)}>
-          <div className="modal quota-modal" onMouseDown={(event) => event.stopPropagation()}>
+      {(showQuotas || quotasExit.closing) && (
+        <div className={`modal-backdrop${quotasExit.closing ? " is-closing" : ""}`} onMouseDown={() => quotasExit.dismiss()}>
+          <div className={`modal quota-modal${quotasExit.closing ? " is-closing" : ""}`} onMouseDown={(event) => event.stopPropagation()}>
             <span className="modal-icon quota-icon"><Icon name="settings" size={24} /></span>
             <h2>Daily food quotas</h2>
             <p>Set {selectedCat.name}’s target amounts for each day.</p>
@@ -2375,28 +2188,43 @@ export default function App() {
           <Icon name="paw" size={19} />
           <span>Care</span>
         </button>
-        <button aria-current={activeTab === "cats" ? "page" : undefined} className={activeTab === "cats" ? "active" : ""} onClick={() => setActiveTab("cats")} type="button">
+        <button aria-current={activeTab === "cats" ? "page" : undefined} className={activeTab === "cats" ? "active" : ""} onClick={() => navigateTo("cats")} type="button">
           <Icon name="heart" size={19} />
           <span>Cats</span>
         </button>
-        <button aria-current={activeTab === "family" ? "page" : undefined} className={activeTab === "family" ? "active" : ""} onClick={() => setActiveTab("family")} type="button">
+        <button aria-current={activeTab === "analytics" ? "page" : undefined} className={activeTab === "analytics" ? "active" : ""} onClick={() => navigateTo("analytics")} type="button">
+          <Icon name="chart" size={20} />
+          <span>Analytics</span>
+        </button>
+        <button aria-current={activeTab === "family" ? "page" : undefined} className={activeTab === "family" ? "active" : ""} onClick={() => navigateTo("family")} type="button">
           <Icon name="family" size={19} />
           <span>Family</span>
         </button>
       </nav>
       {activeTab === "cats" && <CatsOverview
         cats={cats}
+        foodProgress={Object.fromEntries(cats.map((cat) => {
+          const current = { ...emptyTracker, ...(trackers[String(cat.id)] ?? {}) };
+          return [String(cat.id), {
+            treats: current.treats,
+            treatsGoal: current.treatsGoal,
+            kibble: current.kibble,
+            kibbleGoal: current.kibbleGoal,
+            wetFood: current.cans + current.canProgress / 100,
+            wetFoodGoal: current.cansGoal,
+          }];
+        }))}
         error={cloudError || photoError}
         familyName={cloudFamily?.name}
-        onManageFamily={() => setActiveTab("family")}
+        onManageFamily={() => navigateTo("family")}
         onAdd={() => setShowAddCat(true)}
         onEdit={openCatProfile}
         onRemove={removeCat}
-        onSelect={(id) => { setSelectedId(id); setActiveTab("care"); }}
+        onSelect={(id) => { setSelectedId(id); navigateTo("care"); }}
         selectedId={selectedId}
-        summaries={Object.fromEntries(cats.map((cat) => { const current = { ...emptyTracker, ...(trackers[String(cat.id)] ?? {}) }; return [String(cat.id), { ...current, ears: current.earsWeek === (cloudFamily ? getFamilyCareWindow(cloudFamily.timezone).weekStart : getLocalWeekKey()) && current.ears }]; }))}
       />}
-      {activeTab === "family" && <FamilyPortal cats={cats} initialFamily={cloudFamily ?? undefined} initialMembers={cloudFamily ? cloudMembers : undefined} initialSession={cloudSession} onClose={() => { setActiveTab(cloudFamily ? "care" : "cats"); setCloudRefreshTick((tick) => tick + 1); }} onManageCats={() => setActiveTab("cats")} onSelectCat={(id) => { setSelectedId(id); setActiveTab("care"); }} />}
+      {activeTab === "analytics" && <AnalyticsPage cats={cats} logs={careLogs} goals={Object.fromEntries(cats.map((cat) => { const current = { ...emptyTracker, ...(trackers[String(cat.id)] ?? {}) }; return [String(cat.id), { treatsGoal: current.treatsGoal, kibbleGoal: current.kibbleGoal, cansGoal: current.cansGoal }]; }))} targets={cloudTargets} selectedCatId={selectedId} timezone={cloudFamily?.timezone} />}
+      {activeTab === "family" && <FamilyPortal cats={cats} initialFamily={cloudFamily ?? undefined} initialMembers={cloudFamily ? cloudMembers : undefined} initialSession={cloudSession} workspaceReady={!cloudWorkspaceLoading} onClose={() => { navigateTo(cloudFamily ? "care" : "cats"); setCloudRefreshTick((tick) => tick + 1); }} onManageCats={() => navigateTo("cats")} onSelectCat={(id) => { setSelectedId(id); navigateTo("care"); }} />}
       {pendingCatRemoval && <ConfirmDialog
         title={`Remove ${pendingCatRemoval.name}?`}
         description={`${pendingCatRemoval.name} will be removed from your family tracker. Their existing care history will be kept.`}

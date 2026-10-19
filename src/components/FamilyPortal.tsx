@@ -71,7 +71,7 @@ function FamilyMemberAvatar({ name, photoUrl }: { name: string; photoUrl?: strin
   );
 }
 
-export default function FamilyPortal({ onClose, cats = [], onManageCats = () => {}, onSelectCat = () => {}, initialSession, initialFamily, initialMembers }: {
+export default function FamilyPortal({ onClose, cats = [], onManageCats = () => {}, onSelectCat = () => {}, initialSession, initialFamily, initialMembers, workspaceReady }: {
   onClose: () => void;
   cats?: FamilyPortalCat[];
   onManageCats?: () => void;
@@ -79,6 +79,8 @@ export default function FamilyPortal({ onClose, cats = [], onManageCats = () => 
   initialSession?: Session | null;
   initialFamily?: Family;
   initialMembers?: FamilyMember[];
+  /** True once the app shell has hydrated its shared workspace from cache/server. */
+  workspaceReady?: boolean;
 }) {
   const [cachedWorkspace] = useState(() => initialSession?.user.id ? readWorkspaceCache(initialSession.user.id) : null);
   const seededFamily = initialFamily ?? cachedWorkspace?.family ?? null;
@@ -116,7 +118,7 @@ export default function FamilyPortal({ onClose, cats = [], onManageCats = () => 
     editCloseTimer.current = window.setTimeout(() => {
       close();
       setClosingEditDialog(false);
-    }, 180);
+    }, 220);
   }
 
   function persistCachedWorkspace(userId: string | undefined, nextFamily: Family | null, nextMembers: FamilyMember[]) {
@@ -159,6 +161,20 @@ export default function FamilyPortal({ onClose, cats = [], onManageCats = () => 
       setMembers([]);
       return;
     }
+    // App owns the initial workspace request. Wait for its cache/server hydration,
+    // then render those props directly instead of repeating the same requests here.
+    if (workspaceReady === false) {
+      setLoading(true);
+      return;
+    }
+    if (workspaceReady === true && workspaceLoadTick === 0) {
+      setFamily(initialFamily ?? null);
+      setMembers(initialFamily ? initialMembers ?? [] : []);
+      setFamilyName(initialFamily?.name ?? "");
+      setFamilyNameDraft(initialFamily?.name ?? "");
+      setLoading(false);
+      return;
+    }
     let active = true;
     const cached = readWorkspaceCache(session.user.id);
     if (cached) {
@@ -174,7 +190,7 @@ export default function FamilyPortal({ onClose, cats = [], onManageCats = () => 
       if (active) setLoading(false);
     });
     return () => { active = false; };
-  }, [session?.user.id, workspaceLoadTick]);
+  }, [session?.user.id, workspaceLoadTick, workspaceReady, initialFamily, initialMembers]);
 
   useEffect(() => {
     if (!session?.user) return;

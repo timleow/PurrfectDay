@@ -4,7 +4,7 @@ export type Family = { id: string; name: string; timezone: string };
 export type FamilyMember = { id: string; family_id: string; user_id: string | null; email: string; display_name: string; added_at: string; avatar_url?: string | null };
 export type CloudCat = { id: string; family_id: string; name: string; color: string; photo_path: string | null; archived_at: string | null };
 export type TargetRule = { id: string; family_id: string; cat_id: string; metric: string; cadence: "daily" | "weekly"; target_amount: number; unit: string; effective_from: string; effective_until: string | null };
-export type CareEvent = { id: string; family_id: string; cat_id: string; actor_user_id: string; metric: string; amount_delta: number; unit: string; detail: string; occurred_at: string };
+export type CareEvent = { id: string; family_id: string; cat_id: string; actor_user_id: string; metric: string; amount_delta: number; unit: string; detail: string; occurred_at: string; reverses_event_id?: string | null };
 
 function getClient() {
   if (!supabase) throw new Error("Supabase is not configured. Add the project URL and publishable key to .env.local.");
@@ -188,7 +188,7 @@ export async function saveTarget(familyId: string, catId: string, metric: string
 export async function listCareEvents(familyId: string, from: string, until: string): Promise<CareEvent[]> {
   const { data, error } = await getClient()
     .from("care_events")
-    .select("id,family_id,cat_id,actor_user_id,metric,amount_delta,unit,detail,occurred_at")
+    .select("id,family_id,cat_id,actor_user_id,metric,amount_delta,unit,detail,occurred_at,reverses_event_id")
     .eq("family_id", familyId)
     .gte("occurred_at", from)
     .lt("occurred_at", until)
@@ -198,11 +198,11 @@ export async function listCareEvents(familyId: string, from: string, until: stri
   return (data ?? []) as CareEvent[];
 }
 
-export async function recordCareEvent(event: Omit<CareEvent, "id" | "actor_user_id">) {
+export async function recordCareEvent(event: Omit<CareEvent, "actor_user_id">) {
   const { data, error } = await getClient()
     .from("care_events")
     .insert(event)
-    .select("id,family_id,cat_id,actor_user_id,metric,amount_delta,unit,detail,occurred_at")
+    .select("id,family_id,cat_id,actor_user_id,metric,amount_delta,unit,detail,occurred_at,reverses_event_id")
     .single();
   if (error) throw error;
   return data as CareEvent;

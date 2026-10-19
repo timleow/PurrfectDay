@@ -21,18 +21,15 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET" || url.origin !== self.location.origin) return;
 
   if (request.mode === "navigate") {
-    event.respondWith((async () => {
-      try {
-        const response = await fetch(request);
-        if (response.ok && !response.redirected && new URL(response.url).origin === self.location.origin) {
-          const cache = await caches.open(SHELL_CACHE);
-          await cache.put("/", response.clone());
-        }
-        return response;
-      } catch {
-        return (await caches.match("/")) || Response.error();
+    const refreshShell = fetch(request, { cache: "no-cache" }).then(async (response) => {
+      if (response.ok && !response.redirected && new URL(response.url).origin === self.location.origin) {
+        const cache = await caches.open(SHELL_CACHE);
+        await cache.put("/", response.clone());
       }
-    })());
+      return response;
+    }).catch(() => null);
+    event.waitUntil(refreshShell.then(() => undefined));
+    event.respondWith((async () => (await caches.match("/")) || (await refreshShell) || Response.error())());
     return;
   }
 

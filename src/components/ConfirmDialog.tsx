@@ -16,7 +16,7 @@ export default function ConfirmDialog({ title, description, confirmLabel, busy =
   const dismiss = () => {
     if (busy || closing) return;
     setClosing(true);
-    closeTimer.current = window.setTimeout(onCancel, 180);
+    closeTimer.current = window.setTimeout(onCancel, 220);
   };
   const dismissRef = useRef(dismiss);
   dismissRef.current = dismiss;

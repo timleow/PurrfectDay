@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { writeWorkspaceCache } from "../data/workspaceCache";
+import { WORKSPACE_CACHE_TTL, writeWorkspaceCache } from "../data/workspaceCache";
 import App from "../App";
 
 const cloudMocks = vi.hoisted(() => ({
@@ -70,7 +70,7 @@ beforeEach(() => {
   cloudMocks.listTargets.mockResolvedValue([]);
   cloudMocks.listCareEvents.mockImplementation(async () => cloudMocks.returnStaleEvents ? [] : [...cloudMocks.persistedEvents]);
   cloudMocks.recordCareEvent.mockImplementation(async (event: Record<string, unknown>) => {
-    const savedEvent = { ...event, id: `event-${cloudMocks.persistedEvents.length + 1}`, actor_user_id: "person-1" };
+    const savedEvent = { ...event, id: event.id ?? `event-${cloudMocks.persistedEvents.length + 1}`, actor_user_id: "person-1" };
     cloudMocks.persistedEvents.push(savedEvent);
     return savedEvent;
   });
@@ -109,6 +109,32 @@ describe("rapid shared-care updates", () => {
     expect(localStorage.getItem("purrfect-notifications-seen-at")).toBe("456");
   });
 
+  it("groups notifications under Today and Yesterday and reuses care menu event colors", async () => {
+    const now = Date.now();
+    cloudMocks.listFamilyMembers.mockResolvedValue([
+      { id: "member-1", family_id: "family-1", user_id: "person-1", email: "member@example.com", display_name: "Member", added_at: "2026-01-01T00:00:00.000Z" },
+      { id: "member-2", family_id: "family-1", user_id: "person-2", email: "other@example.com", display_name: "Other", added_at: "2026-01-01T00:00:00.000Z" },
+    ]);
+    cloudMocks.persistedEvents = [
+      { id: "today", family_id: "family-1", cat_id: "cat-1", actor_user_id: "person-2", metric: "treats", amount_delta: 1, unit: "treats", detail: "Added 1 treat", occurred_at: new Date(now - 60_000).toISOString() },
+      { id: "yesterday", family_id: "family-1", cat_id: "cat-1", actor_user_id: "person-2", metric: "kibble", amount_delta: 1, unit: "spoons", detail: "Added 1 spoon", occurred_at: new Date(now - 24 * 60 * 60 * 1000).toISOString() },
+    ];
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Care notifications" }));
+    const recentCare = screen.getByRole("dialog", { name: "Recent care activity" });
+    expect(within(recentCare).getByRole("region", { name: "Today" })).not.toBeNull();
+    expect(within(recentCare).getByRole("region", { name: "Yesterday" })).not.toBeNull();
+    expect(within(recentCare).getAllByText("Other · Mochi")).toHaveLength(2);
+    expect(within(recentCare).getByText("Added 1 treat").closest("li")?.querySelector(".notification-icon")?.classList.contains("treat-green")).toBe(true);
+    expect(within(recentCare).getByText("Added 1 spoon").closest("li")?.querySelector(".notification-icon")?.classList.contains("kibble-brown")).toBe(true);
+
+    await user.click(screen.getAllByRole("button", { name: /Care log/ })[0]);
+    const logIcons = container.querySelectorAll(".activity-log-list .activity-log-dot");
+    expect([...logIcons].some((icon) => icon.classList.contains("treat-green"))).toBe(true);
+  });
+
   it("refreshes shared data when the user pulls down from the top", async () => {
     render(<App />);
     await waitFor(() => expect(cloudMocks.listCareEvents).toHaveBeenCalledTimes(1));
@@ -120,7 +146,7 @@ describe("rapid shared-care updates", () => {
     await waitFor(() => expect(cloudMocks.listCareEvents).toHaveBeenCalledTimes(2));
   });
 
-  it("shows a recent cached workspace immediately while refreshing it from Supabase", async () => {
+  it("hydrates week-old localStorage data immediately while refreshing it from Supabase", async () => {
     const family = { id: "family-1", name: "My family", timezone: "Asia/Singapore" };
     const event = { id: "cached-event", family_id: "family-1", cat_id: "cat-1", actor_user_id: "person-1", metric: "treats", amount_delta: 2, unit: "treats", detail: "Added 2 treats", occurred_at: new Date().toISOString() };
     writeWorkspaceCache("person-1", {
@@ -130,6 +156,9 @@ describe("rapid shared-care updates", () => {
       targets: [],
       events: [event],
     });
+    const cacheKey = "purrfect-workspace-v1:person-1";
+    const cachedWorkspace = JSON.parse(localStorage.getItem(cacheKey) ?? "{}") as { savedAt: number };
+    localStorage.setItem(cacheKey, JSON.stringify({ ...cachedWorkspace, savedAt: Date.now() - WORKSPACE_CACHE_TTL + 1000 }));
     let resolveFamily!: (value: typeof family) => void;
     cloudMocks.listCats.mockResolvedValueOnce([{ id: "cat-1", family_id: "family-1", name: "Fresh Mochi", color: "#79B8A9", photo_path: null, archived_at: null }]);
     cloudMocks.getMyFamily.mockImplementationOnce(() => new Promise((resolve) => { resolveFamily = resolve; }));
@@ -187,5 +216,19 @@ describe("rapid shared-care updates", () => {
     await new Promise((resolve) => window.setTimeout(resolve, 450));
     expect(container.querySelector(".big-tap-card .big-count")?.textContent).toContain("2");
     expect(screen.getByRole("button", { name: /Who fed\?/ }).querySelector("span")?.textContent).toBe("2");
+  });
+
+  it("persists an undo as a reversal of the exact care event it undoes", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Tap to add one" }));
+    await waitFor(() => expect(cloudMocks.recordCareEvent).toHaveBeenCalledTimes(1));
+    const originalEvent = cloudMocks.recordCareEvent.mock.calls[0][0] as Record<string, unknown>;
+
+    await waitFor(() => expect(screen.getAllByRole("button", { name: /Undo recent care action/ })).toHaveLength(2));
+    await user.click(screen.getAllByRole("button", { name: /Undo recent care action/ })[0]);
+    await waitFor(() => expect(cloudMocks.recordCareEvent).toHaveBeenCalledTimes(2));
+    const undoEvent = cloudMocks.recordCareEvent.mock.calls[1][0] as Record<string, unknown>;
+    expect(undoEvent.reverses_event_id).toBe(originalEvent.id);
   });
 });

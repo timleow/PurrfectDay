@@ -8,20 +8,19 @@ afterEach(() => cleanup());
 
 describe("Cats overview", () => {
   const cats = [{ id: "cat-1", name: "Mochi", color: "#d494b7", initial: "M" }];
-  const summaries = { "cat-1": { treats: 2, treatsGoal: 4, kibble: 1, kibbleGoal: 3, cans: 1, cansGoal: 1, played: 2, ears: true } };
 
-  it("summarizes a cat's care and offers profile actions", async () => {
+  it("keeps cat management compact and offers care and profile actions", async () => {
     const user = userEvent.setup();
     const onEdit = vi.fn();
     const onSelect = vi.fn();
-    render(<CatsOverview cats={cats} summaries={summaries} selectedId="cat-1" onSelect={onSelect} onAdd={vi.fn()} onEdit={onEdit} onRemove={vi.fn()} />);
+    render(<CatsOverview cats={cats} selectedId="cat-1" onSelect={onSelect} onAdd={vi.fn()} onEdit={onEdit} onRemove={vi.fn()} />);
 
     expect(screen.getByRole("heading", { name: "Your cats" })).not.toBeNull();
-    expect(screen.getByText("2 / 4")).not.toBeNull();
-    expect(screen.getByText("Done this week")).not.toBeNull();
+    expect(screen.getByRole("link", { name: "Mochi cat" })).not.toBeNull();
+    expect(screen.queryByText("Today’s care")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Track care for Mochi" }));
     expect(onSelect).toHaveBeenCalledWith("cat-1");
-    await user.click(screen.getByRole("link", { name: "Mochi cat care summary" }));
+    await user.click(screen.getByRole("link", { name: "Mochi cat" }));
     expect(onSelect).toHaveBeenCalledTimes(2);
     await user.click(screen.getByRole("button", { name: "Edit cat" }));
     expect(onEdit).toHaveBeenCalledWith("cat-1");
@@ -30,14 +29,14 @@ describe("Cats overview", () => {
 
   it("makes the add-cat action clear when the family has no cats", () => {
     const onAdd = vi.fn();
-    render(<CatsOverview cats={[]} summaries={{}} familyName="Lee family" selectedId="" onSelect={vi.fn()} onAdd={onAdd} onEdit={vi.fn()} onRemove={vi.fn()} />);
+    render(<CatsOverview cats={[]} familyName="Lee family" selectedId="" onSelect={vi.fn()} onAdd={onAdd} onEdit={vi.fn()} onRemove={vi.fn()} />);
     expect(screen.getByRole("heading", { name: "No cats yet" })).not.toBeNull();
     expect(screen.getAllByRole("button", { name: /Add a cat/ })).not.toHaveLength(0);
   });
 
   it("offers family creation or invite refresh when the user has no family", () => {
     const onManageFamily = vi.fn();
-    render(<CatsOverview cats={[]} summaries={{}} selectedId="" onSelect={vi.fn()} onAdd={vi.fn()} onEdit={vi.fn()} onRemove={vi.fn()} onManageFamily={onManageFamily} />);
+    render(<CatsOverview cats={[]} selectedId="" onSelect={vi.fn()} onAdd={vi.fn()} onEdit={vi.fn()} onRemove={vi.fn()} onManageFamily={onManageFamily} />);
     expect(screen.getByRole("heading", { name: "Your cats start with family" })).not.toBeNull();
     expect(screen.queryByRole("button", { name: /Add a cat/ })).toBeNull();
     screen.getByRole("button", { name: "I was invited to a family" }).click();

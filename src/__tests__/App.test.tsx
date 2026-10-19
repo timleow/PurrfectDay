@@ -89,7 +89,7 @@ describe("tracking and family navigation", () => {
     const dialog = screen.getByRole("dialog", { name: "What would you like to track?" });
     expect(within(dialog).getAllByRole("button")).toHaveLength(10);
     await user.click(within(dialog).getByRole("button", { name: /Play/ }));
-    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(screen.getByRole("button", { name: "Tap to add one" })).not.toBeNull();
     expect(screen.getByRole("group", { name: "Playtime tracker" })).not.toBeNull();
   });
@@ -223,7 +223,7 @@ describe("tracking and family navigation", () => {
     await user.click(screen.getAllByRole("button", { name: "Edit cat" })[0]);
     expect(screen.getByRole("dialog", { name: "Edit Mochi" })).not.toBeNull();
     await user.click(screen.getByRole("button", { name: "Care" }));
-    expect(screen.queryByRole("dialog", { name: "Edit Mochi" })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit Mochi" })).toBeNull());
   });
 
   it("opens the cat profile editor with zoom and crop when changing an existing photo", async () => {
@@ -327,6 +327,25 @@ describe("tracking and family navigation", () => {
 });
 
 describe("care tracking corrections", () => {
+  it("opens Analytics from the primary navigation between Cats and Family", async () => {
+    const user = userEvent.setup();
+    renderApp();
+    const navigation = screen.getByRole("navigation", { name: "Primary navigation" });
+    const links = within(navigation).getAllByRole("button");
+    expect(links.map((button) => button.textContent?.trim())).toEqual(["Care", "Cats", "Analytics", "Family"]);
+    await user.click(within(navigation).getByRole("button", { name: "Analytics" }));
+    expect(await screen.findByRole("heading", { name: "Analytics" })).not.toBeNull();
+  });
+
+  it("opens the care menu from the progress heart", async () => {
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Open care menu" }));
+
+    expect(screen.getByRole("dialog", { name: "What would you like to track?" })).not.toBeNull();
+  });
+
   it("keeps the Now tap to track number in a stable slot when its digit count changes", async () => {
     localStorage.setItem("purrfect-trackers", JSON.stringify({ "1": { treats: 9, treatsGoal: 10 } }));
     const user = userEvent.setup();

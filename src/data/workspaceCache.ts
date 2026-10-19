@@ -10,7 +10,8 @@ export type CachedWorkspace = {
 };
 
 const CACHE_PREFIX = "purrfect-workspace-v1:";
-export const WORKSPACE_CACHE_TTL = 5 * 60 * 1000;
+// Keep a week of account-scoped data for quick display while the server refreshes it.
+export const WORKSPACE_CACHE_TTL = 7 * 24 * 60 * 60 * 1000;
 
 function cacheKey(userId: string) {
   return `${CACHE_PREFIX}${userId}`;
