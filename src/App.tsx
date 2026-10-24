@@ -1000,22 +1000,42 @@ export default function App() {
   useEffect(() => {
     const viewport = window.visualViewport;
     const updateViewport = () => {
-      document.documentElement.style.setProperty("--visual-viewport-height", `${viewport?.height ?? window.innerHeight}px`);
+      const root = document.documentElement;
+      root.style.setProperty("--visual-viewport-height", `${viewport?.height ?? window.innerHeight}px`);
+      root.style.setProperty("--visual-viewport-top", `${viewport?.offsetTop ?? 0}px`);
     };
     const keepFocusedFieldVisible = (event: FocusEvent) => {
-      const target = event.target;
-      if (!(target instanceof HTMLElement) || !target.closest(".modal")) return;
-      window.setTimeout(() => target.scrollIntoView?.({ block: "center", behavior: "smooth" }), 180);
+      const field = event.target instanceof HTMLElement ? event.target : null;
+      const modal = field?.closest<HTMLElement>(".modal");
+      if (!field || !modal) return;
+      window.setTimeout(() => {
+        if (!field.isConnected || !modal.isConnected) return;
+        const viewportTop = viewport?.offsetTop ?? 0;
+        const viewportBottom = viewportTop + (viewport?.height ?? window.innerHeight);
+        const modalBounds = modal.getBoundingClientRect();
+        const fieldBounds = field.getBoundingClientRect();
+        const visibleTop = Math.max(modalBounds.top, viewportTop) + 16;
+        const visibleBottom = Math.min(modalBounds.bottom, viewportBottom) - 16;
+        const scrollDelta = fieldBounds.bottom > visibleBottom
+          ? fieldBounds.bottom - visibleBottom
+          : fieldBounds.top < visibleTop
+            ? fieldBounds.top - visibleTop
+            : 0;
+        if (scrollDelta) modal.scrollTop += scrollDelta;
+      }, 220);
     };
     updateViewport();
     viewport?.addEventListener("resize", updateViewport);
     viewport?.addEventListener("scroll", updateViewport);
+    window.addEventListener("resize", updateViewport);
     document.addEventListener("focusin", keepFocusedFieldVisible);
     return () => {
       viewport?.removeEventListener("resize", updateViewport);
       viewport?.removeEventListener("scroll", updateViewport);
+      window.removeEventListener("resize", updateViewport);
       document.removeEventListener("focusin", keepFocusedFieldVisible);
       document.documentElement.style.removeProperty("--visual-viewport-height");
+      document.documentElement.style.removeProperty("--visual-viewport-top");
     };
   }, []);
 

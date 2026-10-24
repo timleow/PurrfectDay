@@ -56,13 +56,6 @@ a:focus-visible {
 }
 
 .app-shell.family-route-hidden { display: none; }
-.app-root:has([aria-modal="true"]) > .app-shell,
-.app-root:has([aria-modal="true"]) > .cats-page,
-.app-root:has([aria-modal="true"]) > .analytics-page,
-.app-root:has([aria-modal="true"]) > .family-portal-page {
-  position: relative;
-  z-index: 31;
-}
 
 .sidebar {
   position: fixed;
@@ -1908,7 +1901,7 @@ h1 {
 :root[data-theme="dark"] .choice-picker-check { color: #b4d4b5; }
 :root[data-theme="dark"] .action-preview-label { color: #adb5ac; }
 
-.modal-backdrop { z-index: 1000; max-height: var(--visual-viewport-height, 100dvh); overflow-y: auto; }
+.modal-backdrop { top: var(--visual-viewport-top, 0px); bottom: auto; z-index: 1000; height: var(--visual-viewport-height, 100dvh); max-height: var(--visual-viewport-height, 100dvh); overflow-y: auto; }
 .modal { max-height: calc(var(--visual-viewport-height, 100dvh) - 32px); }
 .modal-actions { position: sticky; bottom: -30px; padding: 12px 0 0; background: #fffdf9; }
 :root[data-theme="dark"] .modal-actions { background: #222825; }
@@ -1972,7 +1965,11 @@ h1 {
   .track-picker-backdrop {
     position: fixed;
     z-index: 1300;
-    inset: 0;
+    top: var(--visual-viewport-top, 0px);
+    right: 0;
+    bottom: auto;
+    left: 0;
+    height: var(--visual-viewport-height, 100dvh);
     display: grid;
     align-items: end;
     justify-items: center;
@@ -3365,7 +3362,11 @@ h1 {
 .confirm-dialog-backdrop {
   position: fixed;
   z-index: 1500;
-  inset: 0;
+  top: var(--visual-viewport-top, 0px);
+  right: 0;
+  bottom: auto;
+  left: 0;
+  height: var(--visual-viewport-height, 100dvh);
   display: grid;
   place-items: center;
   padding: 20px;
