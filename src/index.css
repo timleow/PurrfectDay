@@ -2028,7 +2028,7 @@ h1 {
   .track-picker-dialog .mobile-item-grid .care-action-remove { position: absolute; z-index: 3; top: -7px; right: -7px; display: grid; width: 22px; min-width: 22px; height: 22px; align-items: center; justify-content: center; flex-direction: row; gap: 0; padding: 0; border: 2px solid #fffdf9; border-radius: 50%; color: #fff; background: #d96960; box-shadow: 0 2px 6px #4e2c2940; cursor: pointer; transition: transform 120ms ease; touch-action: manipulation; }
   .care-action-remove:disabled { cursor: not-allowed; opacity: .45; }
   .care-action-tile-wrap.is-dragging { opacity: 0; }
-  .care-action-drag-preview { position: fixed; z-index: 1100; display: flex; min-width: 0; align-items: center; justify-content: center; flex-direction: column; gap: 5px; padding: 7px 4px; border: 2px solid transparent; border-radius: 15px; color: var(--item-color); background: var(--item-bg); box-shadow: 0 12px 24px #34452c44; pointer-events: none; }
+  .care-action-drag-preview { position: fixed; z-index: 1350; display: flex; min-width: 0; align-items: center; justify-content: center; flex-direction: column; gap: 5px; padding: 7px 4px; border: 2px solid transparent; border-radius: 15px; color: var(--item-color); background: var(--item-bg); box-shadow: 0 12px 24px #34452c44; pointer-events: none; }
   .care-action-drag-preview > span { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 10px; background: rgba(255,255,255,.72); }
   .care-action-drag-preview > strong { max-width: 100%; overflow: hidden; padding: 0 3px; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
   .care-action-drag-preview > .tile-goal-count { color: color-mix(in srgb, var(--item-color) 75%, #625c54); font-size: 7px; font-weight: 700; line-height: 1; }

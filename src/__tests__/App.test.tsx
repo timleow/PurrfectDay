@@ -530,6 +530,10 @@ describe("care tracking corrections", () => {
     const { container } = renderApp();
     await user.click(screen.getByRole("button", { name: "Care Menu" }));
     let menu = screen.getByRole("dialog", { name: "Care tracker" });
+    const menuCss = readFileSync("src/index.css", "utf8");
+    expect(menuCss).toMatch(/\.track-picker-backdrop\s*\{[^}]*z-index:\s*1300;/s);
+    expect(menuCss).toMatch(/\.care-action-drag-preview\s*\{[^}]*z-index:\s*1350;/s);
+    expect(menuCss).toMatch(/\.modal-backdrop\.action-editor-backdrop\s*\{\s*z-index:\s*1400;/);
     const tiles = Array.from(menu.querySelectorAll(".care-action-tile-wrap .care-action-tile-content > button:not(.care-action-remove)"));
     expect(tiles.at(-1)?.textContent).toContain("Pee");
     await user.click(within(menu).getByRole("button", { name: "Add care action" }));
