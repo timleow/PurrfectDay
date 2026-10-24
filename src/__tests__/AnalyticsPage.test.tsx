@@ -22,7 +22,7 @@ describe("Analytics page", () => {
       timezone="UTC"
     />);
 
-    expect(screen.getByRole("heading", { name: "Analytics" })).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "Cats" })).not.toBeNull();
     const treatRow = container.querySelectorAll(".analytics-contribution-row")[0];
     expect(within(treatRow as HTMLElement).getByText("Alex")).not.toBeNull();
     expect(treatRow.textContent).toContain("3 treats");

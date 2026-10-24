@@ -5,6 +5,9 @@ export type IconName =
   | "bell"
   | "calendar"
   | "chart"
+  | "cat"
+  | "catLounging"
+  | "chewToy"
   | "check"
   | "chevron"
   | "drop"
@@ -17,11 +20,13 @@ export type IconName =
   | "more"
   | "moon"
   | "paw"
+  | "outside"
   | "play"
   | "poop"
   | "pee"
   | "removePerson"
   | "plus"
+  | "reorder"
   | "settings"
   | "sparkle"
   | "sun"
@@ -45,15 +50,16 @@ export default function Icon({ name, size = 20 }: { name: IconName; size?: numbe
       </>
     ),
     chart: <><path d="M4 19V5M4 19h16" /><path d="m7 15 4-4 3 2 5-6" /></>,
+    cat: <><path d="m4 9 .5-5L9 7a8 8 0 0 1 6 0l4.5-3 .5 5a8 8 0 1 1-16 0Z" /><path d="M8.5 11h.1m7-.1h.1m-4.6 3 1 1 1-1M4 13l-2-1m2 4-2 1m18-4 2-1m-2 4 2 1" /></>,
+    catLounging: <>
+      <path d="M5.4 14.6c1.5-2.1 4-3.2 7.3-3.2h2.1l.5-5.1 3.2 3 3.3-1.2.7 5.2c.3 2.5-1.1 4.2-3.7 4.2h-9c-2.4 0-4.1.5-5.6 1.3-1.4.8-3.5.3-3.5-1.2 0-1.2 1.7-2.1 3.7-3Z" />
+      <path d="M5.2 14.7c-2.4 1.9-4.1.5-3.2-1.2.5-.9 1.6-1.1 2.4-.4m13.2 1.2h.1m3.2-.2h.1M7 21h15" />
+    </>,
     check: <path d="m5 12 4 4L19 6" />,
+    chewToy: <path d="M4 12c2.7-5 5.3-5 8 0s5.3 5 8 0" style={{ strokeWidth: 3.4 }} />,
     chevron: <path d="m9 18 6-6-6-6" />,
     drop: <path d="M12 3s6 6.6 6 11a6 6 0 0 1-12 0c0-4.4 6-11 6-11Z" />,
-    ear: (
-      <>
-        <path d="M6.2 5.7C8.3 2.2 14.8 2.1 17 6c2.1 3.8-.9 6.1-3 7.4-2.5 1.6-1.6 5.3-5.1 5.3-3.4 0-5.3-7.8-2.7-13Z" />
-        <path d="M9 8.3c1.5-1.5 4.5-1.4 5.4.6.8 1.7-1.2 2.5-2.3 3.2" />
-      </>
-    ),
+    ear: <><path d="M3.5 13 5.4 4.5l6 5c.4-.1.8-.1 1.2-.1s.8 0 1.2.1l6-5 1.8 8.5c.3.9.4 1.9.4 2.8 0 4-3.3 6.2-9.5 6.2S3 19.8 3 15.8c0-.9.2-1.9.5-2.8Z" /><path d="m7.3 10.2 1-3.7 2.4 2.3m6 1.4-1-3.7-2.4 2.3" /></>,
     edit: <><path d="m14.5 5.5 4 4M4 20l4.2-.9L19 7.3 16.7 5 5.9 15.8 4 20Z" /><path d="M13.8 6.2 17.8 10.2" /></>,
     family: (
       <>
@@ -75,6 +81,7 @@ export default function Icon({ name, size = 20 }: { name: IconName; size?: numbe
       <circle cx="12" cy="19" r="1.6" />
     </>,
     moon: <path d="M20.2 15.1A8.5 8.5 0 0 1 8.9 3.8 8.5 8.5 0 1 0 20.2 15.1Z" />,
+    outside: <><circle cx="17" cy="6" r="2.5" /><path d="m2.5 19 6-7 4 4 3.3-3.2L21.5 19H2.5Z" /><path d="M4 5h5M6.5 2.5v5" /></>,
     poop: (
       <>
         <path d="M5 18.2c0-1.7 1.2-3 3-3.2-.7-2.1.4-4.3 2.6-4.8.3-2.4 1.5-4 3.4-4s3.1 1.6 3.4 4c2.1.5 3.2 2.7 2.5 4.8 1.8.2 3 1.5 3 3.2 0 1-.8 1.8-1.8 1.8H6.8c-1 0-1.8-.8-1.8-1.8Z" />
@@ -99,6 +106,7 @@ export default function Icon({ name, size = 20 }: { name: IconName; size?: numbe
     ),
     play: <path d="m8 5 11 7-11 7V5Z" />,
     plus: <path d="M12 5v14M5 12h14" />,
+    reorder: <><circle cx="8" cy="6" r="1" /><circle cx="16" cy="6" r="1" /><circle cx="8" cy="12" r="1" /><circle cx="16" cy="12" r="1" /><circle cx="8" cy="18" r="1" /><circle cx="16" cy="18" r="1" /></>,
     settings: (
       <>
         <path d="M4 7h10M18 7h2M4 17h2M10 17h10" />

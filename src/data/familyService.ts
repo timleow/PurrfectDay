@@ -1,10 +1,12 @@
 import { supabase } from "./supabase";
 
-export type Family = { id: string; name: string; timezone: string };
+export type CareAnimation = "playful" | "subtle" | "none" | "chomp" | "play" | "outside" | "water" | "pee" | "poop" | "paw" | "ears";
+export type CareActionConfig = { key: string; name: string; shortName: string; icon: string; unit: string; behavior: "numeric" | "percentage" | "toggle"; targetCadence: "none" | "daily" | "weekly" | "monthly"; targetAmount: number | null; animation: CareAnimation; color: string; deleted?: boolean };
+export type Family = { id: string; name: string; timezone: string; care_actions?: CareActionConfig[] };
 export type FamilyMember = { id: string; family_id: string; user_id: string | null; email: string; display_name: string; added_at: string; avatar_url?: string | null };
 export type CloudCat = { id: string; family_id: string; name: string; color: string; photo_path: string | null; archived_at: string | null };
-export type TargetRule = { id: string; family_id: string; cat_id: string; metric: string; cadence: "daily" | "weekly"; target_amount: number; unit: string; effective_from: string; effective_until: string | null };
-export type CareEvent = { id: string; family_id: string; cat_id: string; actor_user_id: string; metric: string; amount_delta: number; unit: string; detail: string; occurred_at: string; reverses_event_id?: string | null };
+export type TargetRule = { id: string; family_id: string; cat_id: string; metric: string; cadence: "daily" | "weekly" | "monthly"; target_amount: number; unit: string; effective_from: string; effective_until: string | null };
+export type CareEvent = { id: string; family_id: string; cat_id: string; actor_user_id: string; metric: string; amount_delta: number; unit: string; detail: string; occurred_at: string; reverses_event_id?: string | null; action_name_snapshot?: string | null; action_icon_snapshot?: string | null; action_unit_snapshot?: string | null };
 
 function getClient() {
   if (!supabase) throw new Error("Supabase is not configured. Add the project URL and publishable key to .env.local.");
@@ -20,7 +22,7 @@ export async function createFamily(name: string, timezone: string) {
 export async function getMyFamily(userId: string): Promise<Family | null> {
   const { data, error } = await getClient()
     .from("family_members")
-    .select("family:families(id,name,timezone)")
+    .select("family:families(id,name,timezone,care_actions)")
     .eq("user_id", userId)
     .maybeSingle();
   if (error) throw error;
@@ -30,6 +32,11 @@ export async function getMyFamily(userId: string): Promise<Family | null> {
 
 export async function updateFamily(familyId: string, changes: Pick<Family, "name">) {
   const { error } = await getClient().from("families").update(changes).eq("id", familyId);
+  if (error) throw error;
+}
+
+export async function saveFamilyCareActions(familyId: string, actions: CareActionConfig[]) {
+  const { error } = await getClient().from("families").update({ care_actions: actions }).eq("id", familyId);
   if (error) throw error;
 }
 
@@ -168,7 +175,7 @@ export async function listTargets(familyId: string): Promise<TargetRule[]> {
   return (data ?? []) as TargetRule[];
 }
 
-export async function saveTarget(familyId: string, catId: string, metric: string, cadence: "daily" | "weekly", targetAmount: number, unit: string, effectiveFrom = new Date().toISOString().slice(0, 10)) {
+export async function saveTarget(familyId: string, catId: string, metric: string, cadence: "daily" | "weekly" | "monthly", targetAmount: number, unit: string, effectiveFrom = new Date().toISOString().slice(0, 10)) {
   const { data: authData, error: authError } = await getClient().auth.getUser();
   if (authError) throw authError;
   if (!authData.user) throw new Error("Sign in again to change a target.");
@@ -188,7 +195,7 @@ export async function saveTarget(familyId: string, catId: string, metric: string
 export async function listCareEvents(familyId: string, from: string, until: string): Promise<CareEvent[]> {
   const { data, error } = await getClient()
     .from("care_events")
-    .select("id,family_id,cat_id,actor_user_id,metric,amount_delta,unit,detail,occurred_at,reverses_event_id")
+    .select("id,family_id,cat_id,actor_user_id,metric,amount_delta,unit,detail,occurred_at,reverses_event_id,action_name_snapshot,action_icon_snapshot,action_unit_snapshot")
     .eq("family_id", familyId)
     .gte("occurred_at", from)
     .lt("occurred_at", until)
@@ -202,7 +209,7 @@ export async function recordCareEvent(event: Omit<CareEvent, "actor_user_id">) {
   const { data, error } = await getClient()
     .from("care_events")
     .insert(event)
-    .select("id,family_id,cat_id,actor_user_id,metric,amount_delta,unit,detail,occurred_at,reverses_event_id")
+    .select("id,family_id,cat_id,actor_user_id,metric,amount_delta,unit,detail,occurred_at,reverses_event_id,action_name_snapshot,action_icon_snapshot,action_unit_snapshot")
     .single();
   if (error) throw error;
   return data as CareEvent;

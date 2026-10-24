@@ -100,7 +100,7 @@ describe("rapid shared-care updates", () => {
 
     const recentCare = screen.getByRole("dialog", { name: "Recent care activity" });
     expect(within(recentCare).getByText("Other · Mochi")).not.toBeNull();
-    expect(within(recentCare).getByText("Added 2 treats")).not.toBeNull();
+    expect(within(recentCare).getByText(/Added 2 treats/)).not.toBeNull();
     expect(within(recentCare).queryByText("Member · Mochi")).toBeNull();
     expect(within(recentCare).queryByText("Added 1 treat")).toBeNull();
     expect(within(recentCare).queryByText("Removed 1 treat")).toBeNull();
@@ -127,8 +127,8 @@ describe("rapid shared-care updates", () => {
     expect(within(recentCare).getByRole("region", { name: "Today" })).not.toBeNull();
     expect(within(recentCare).getByRole("region", { name: "Yesterday" })).not.toBeNull();
     expect(within(recentCare).getAllByText("Other · Mochi")).toHaveLength(2);
-    expect(within(recentCare).getByText("Added 1 treat").closest("li")?.querySelector(".notification-icon")?.classList.contains("treat-green")).toBe(true);
-    expect(within(recentCare).getByText("Added 1 spoon").closest("li")?.querySelector(".notification-icon")?.classList.contains("kibble-brown")).toBe(true);
+    expect(within(recentCare).getByText(/Added 1 treat/).closest("li")?.querySelector(".notification-icon")?.classList.contains("treat-green")).toBe(true);
+    expect(within(recentCare).getByText(/Added 1 spoon/).closest("li")?.querySelector(".notification-icon")?.classList.contains("kibble-brown")).toBe(true);
 
     await user.click(screen.getAllByRole("button", { name: /Care log/ })[0]);
     const logIcons = container.querySelectorAll(".activity-log-list .activity-log-dot");

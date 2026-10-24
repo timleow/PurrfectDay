@@ -1,4 +1,4 @@
-export type TrackableKey =
+export type BuiltInTrackableKey =
   | "treats"
   | "kibble"
   | "cans"
@@ -8,11 +8,14 @@ export type TrackableKey =
   | "peed"
   | "ears"
   | "played";
+export type TrackableKey = BuiltInTrackableKey | (string & {});
 
 export type CareLog = {
   id: string;
   catId: number | string;
   metric?: TrackableKey;
+  icon?: string;
+  unit?: string;
   actorUserId?: string;
   who: string;
   what: string;
@@ -24,7 +27,7 @@ export type CareLog = {
   latestTimestamp?: string;
 };
 
-export const metricLabels: Record<TrackableKey, string> = {
+export const metricLabels: Partial<Record<TrackableKey, string>> = {
   treats: "Dental treats",
   kibble: "Kibble",
   cans: "Wet food",
@@ -108,7 +111,7 @@ export function removeUndoneCareLogs(logs: CareLog[]) {
     const metric = getLogMetric(entry);
     const amount = metric === "cans"
       ? `${Math.round(delta * 100)}% of a can`
-      : `${Number(delta.toFixed(1))} ${metricUnits[metric] ?? "times"}`;
+      : `${Number(delta.toFixed(1))}${entry.unit === "%" ? "%" : ` ${entry.unit ?? metricUnits[metric] ?? "times"}`}`;
     return [{ ...entry, amountDelta: delta, detail: `Added ${amount}` }];
   });
 }
@@ -128,6 +131,9 @@ export function batchCareLogs(logs: CareLog[]) {
           && firstDelta > 0
           && String(first.catId) === String(entry.catId)
           && getLogMetric(first) === getLogMetric(entry)
+          && first.what === entry.what
+          && first.icon === entry.icon
+          && first.unit === entry.unit
           && actorKey(first) === actorKey(entry)
           && new Date(entry.timestamp).getTime() - new Date(first.timestamp).getTime() <= batchWindowMs;
       })
@@ -144,10 +150,13 @@ export function batchCareLogs(logs: CareLog[]) {
     const totalDelta = group.reduce((total, entry) => total + (getCareLogDelta(entry) ?? 0), 0);
     const amount = Number(Math.abs(totalDelta).toFixed(1));
     const action = first.detail.startsWith("Removed") ? "Removed" : "Added";
-    const singular = ({ treats: "treat", kibble: "spoon", teethPawing: "time", played: "session" } as Partial<Record<TrackableKey, string>>)[metric] ?? metricUnits[metric] ?? "times";
+    const unit = first.unit ?? metricUnits[metric] ?? "times";
+    const singular = ({ treats: "treat", kibble: "spoon", teethPawing: "time", played: "session" } as Partial<Record<TrackableKey, string>>)[metric] ?? unit.replace(/s$/, "");
     const detail = metric === "cans"
       ? `${action} ${Math.round(amount * 100)}% of a can`
-      : `${action} ${amount} ${amount === 1 ? singular : metricUnits[metric] ?? "times"}`;
+      : unit === "%"
+        ? `${action} ${amount}%`
+      : `${action} ${amount} ${amount === 1 ? singular : unit}`;
     return { ...first, detail, amountDelta: totalDelta, batchCount: group.length, latestTimestamp: group[group.length - 1].timestamp };
   }).sort((left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime());
 }

@@ -65,4 +65,17 @@ describe("care log batching", () => {
     expect(batches.find((entry) => entry.id === "outside-window")?.detail).toBe("Added 1 treat");
     expect(batches.find((entry) => entry.id === "other-cat")?.detail).toBe("Added 1 treat");
   });
+
+  it("keeps care events with different action snapshots in separate batches", () => {
+    const original = { ...log("original", "cat-a", 0, 1), what: "Dental treats", icon: "treat", unit: "treats" };
+    const edited = { ...log("edited", "cat-a", 1, 1), what: "Tooth snacks", icon: "sparkle", unit: "pieces" };
+
+    const batches = batchCareLogs(removeUndoneCareLogs([original, edited]));
+
+    expect(batches).toHaveLength(2);
+    expect(batches.map(({ what, icon, unit }) => ({ what, icon, unit }))).toEqual([
+      { what: "Tooth snacks", icon: "sparkle", unit: "pieces" },
+      { what: "Dental treats", icon: "treat", unit: "treats" },
+    ]);
+  });
 });

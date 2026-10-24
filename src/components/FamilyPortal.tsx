@@ -71,11 +71,12 @@ function FamilyMemberAvatar({ name, photoUrl }: { name: string; photoUrl?: strin
   );
 }
 
-export default function FamilyPortal({ onClose, cats = [], onManageCats = () => {}, onSelectCat = () => {}, initialSession, initialFamily, initialMembers, workspaceReady }: {
+export default function FamilyPortal({ onClose, cats = [], onManageCats = () => {}, onSelectCat = () => {}, onRegisterExitGuard, initialSession, initialFamily, initialMembers, workspaceReady }: {
   onClose: () => void;
   cats?: FamilyPortalCat[];
   onManageCats?: () => void;
   onSelectCat?: (catId: number | string) => void;
+  onRegisterExitGuard?: (guard: ((action: () => void) => void) | null) => void;
   initialSession?: Session | null;
   initialFamily?: Family;
   initialMembers?: FamilyMember[];
@@ -103,6 +104,7 @@ export default function FamilyPortal({ onClose, cats = [], onManageCats = () => 
   const [memberNameDraft, setMemberNameDraft] = useState("");
   const [workspaceLoadTick, setWorkspaceLoadTick] = useState(0);
   const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null);
+  const [discardChanges, setDiscardChanges] = useState<{ action: () => void } | null>(null);
 
   useEffect(() => () => { if (editCloseTimer.current !== undefined) window.clearTimeout(editCloseTimer.current); }, []);
 
@@ -119,6 +121,39 @@ export default function FamilyPortal({ onClose, cats = [], onManageCats = () => 
       close();
       setClosingEditDialog(false);
     }, 220);
+  }
+
+  function requestFamilyExit(action: () => void) {
+    const familyNameChanged = Boolean(family && editingFamilyName && familyNameDraft.trim() !== family.name);
+    const member = members.find((entry) => entry.id === editingMemberId);
+    const memberBaseName = member ? member.display_name || member.email.split("@")[0] : "";
+    const memberNameChanged = Boolean(member && memberNameDraft.trim() !== memberBaseName);
+    const hasNewFamilyDraft = !family && Boolean(familyName.trim());
+    const hasNewPersonDraft = Boolean(memberName.trim() || memberEmail.trim());
+    if (!familyNameChanged && !memberNameChanged && !hasNewFamilyDraft && !hasNewPersonDraft) {
+      action();
+      return;
+    }
+    setDiscardChanges({ action: () => {
+      setFamilyNameDraft(family?.name ?? "");
+      setMemberNameDraft("");
+      setMemberName("");
+      setMemberEmail("");
+      action();
+    } });
+  }
+
+  useEffect(() => {
+    onRegisterExitGuard?.(requestFamilyExit);
+    return () => onRegisterExitGuard?.(null);
+  });
+
+  function requestEditDialogClose(isDirty: boolean, close: () => void, resetDraft: () => void) {
+    if (!isDirty) {
+      closeEditDialog(close);
+      return;
+    }
+    setDiscardChanges({ action: () => { resetDraft(); closeEditDialog(close); } });
   }
 
   function persistCachedWorkspace(userId: string | undefined, nextFamily: Family | null, nextMembers: FamilyMember[]) {
@@ -383,7 +418,7 @@ export default function FamilyPortal({ onClose, cats = [], onManageCats = () => 
       <section aria-labelledby="family-portal-title" className="family-portal" role="region">
         <header className="family-portal-header">
           <div><span className="family-portal-eyebrow">Shared care</span><h2 id="family-portal-title">Family &amp; people</h2></div>
-          <button aria-label="Back to care" className="family-portal-close" onClick={onClose} type="button">×</button>
+          <button aria-label="Back to care" className="family-portal-close" onClick={() => requestFamilyExit(onClose)} type="button">×</button>
         </header>
 
         {!isSupabaseConfigured ? (
@@ -455,8 +490,8 @@ export default function FamilyPortal({ onClose, cats = [], onManageCats = () => 
 
             </div>
             <section aria-label={`Cats in ${family.name}`} className="family-cats-section">
-              <div className="family-cats-heading"><div><h3>Cats in {family.name}</h3><p>Every cat here is part of your family’s shared care.</p></div><button className="family-cats-manage" onClick={onManageCats} type="button">Manage cats</button></div>
-              {cats.length ? <ul className="family-cats-list">{cats.map((cat) => <li key={cat.id}><button aria-label={`Care for ${cat.name}`} className="family-cat-link" onClick={() => onSelectCat(cat.id)} type="button">{cat.photo ? <img alt="" src={cat.photo} /> : <span className="family-cat-summary-avatar" style={{ backgroundColor: cat.color }}>{cat.initial}</span>}<strong>{cat.name}</strong><span aria-hidden="true" className="family-cat-link-arrow">→</span></button></li>)}</ul> : <p className="family-cats-empty">No cats added yet.</p>}
+            <div className="family-cats-heading"><div><h3>Cats in {family.name}</h3><p>Every cat here is part of your family’s shared care.</p></div><button className="family-cats-manage" onClick={() => requestFamilyExit(onManageCats)} type="button">Manage cats</button></div>
+            {cats.length ? <ul className="family-cats-list">{cats.map((cat) => <li key={cat.id}><button aria-label={`Care for ${cat.name}`} className="family-cat-link" onClick={() => requestFamilyExit(() => onSelectCat(cat.id))} type="button">{cat.photo ? <img alt="" src={cat.photo} /> : <span className="family-cat-summary-avatar" style={{ backgroundColor: cat.color }}>{cat.initial}</span>}<strong>{cat.name}</strong><span aria-hidden="true" className="family-cat-link-arrow">→</span></button></li>)}</ul> : <p className="family-cats-empty">No cats added yet.</p>}
             </section>
             {notice && <p className="family-feedback" role="status">{notice}</p>}
             </div>
@@ -465,30 +500,30 @@ export default function FamilyPortal({ onClose, cats = [], onManageCats = () => 
         {error && <p className="family-feedback is-error" role="status">{error}</p>}
         <footer className="family-portal-footer">
           <div className="family-portal-footer-actions">
-            <button onClick={onClose} type="button">Back to care</button>
+            <button onClick={() => requestFamilyExit(onClose)} type="button">Back to care</button>
             {family && session && <button className="family-delete-button" disabled={busy} onClick={() => void removeFamily()} type="button">Delete family</button>}
           </div>
         </footer>
-        {editingFamilyName && family && <div className={`modal-backdrop${closingEditDialog ? " is-closing" : ""}`} onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) closeEditDialog(() => setEditingFamilyName(false)); }}>
+        {editingFamilyName && family && <div className={`modal-backdrop${closingEditDialog ? " is-closing" : ""}`} onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) requestEditDialogClose(familyNameDraft.trim() !== family.name, () => setEditingFamilyName(false), () => setFamilyNameDraft(family.name)); }}>
           <form aria-labelledby="edit-family-name-title" aria-modal="true" className={`modal${closingEditDialog ? " is-closing" : ""}`} onSubmit={(event) => void saveFamilyName(event)} role="dialog">
             <span className="modal-icon">⌂</span>
             <h2 id="edit-family-name-title">Edit family name</h2>
             <p>This name is shared with everyone in your family.</p>
             <label>Family name<input maxLength={80} onChange={(event) => setFamilyNameDraft(event.target.value)} required value={familyNameDraft} /></label>
             <div className="modal-actions">
-              <button disabled={busy || closingEditDialog} onClick={() => closeEditDialog(() => setEditingFamilyName(false))} type="button">Cancel</button>
+              <button disabled={busy || closingEditDialog} onClick={() => requestEditDialogClose(familyNameDraft.trim() !== family.name, () => setEditingFamilyName(false), () => setFamilyNameDraft(family.name))} type="button">Cancel</button>
               <button disabled={busy || closingEditDialog || !familyNameDraft.trim()} type="submit">{busy ? "Saving…" : "Save"}</button>
             </div>
           </form>
         </div>}
-        {editingMemberId && <div className={`modal-backdrop${closingEditDialog ? " is-closing" : ""}`} onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) closeEditDialog(() => setEditingMemberId(null)); }}>
+        {editingMemberId && <div className={`modal-backdrop${closingEditDialog ? " is-closing" : ""}`} onMouseDown={(event) => { const member = members.find((entry) => entry.id === editingMemberId); const baseName = member ? member.display_name || member.email.split("@")[0] : ""; if (event.target === event.currentTarget && !busy) requestEditDialogClose(memberNameDraft.trim() !== baseName, () => setEditingMemberId(null), () => setMemberNameDraft(baseName)); }}>
           <form aria-labelledby="edit-member-name-title" aria-modal="true" className={`modal${closingEditDialog ? " is-closing" : ""}`} onSubmit={(event) => { event.preventDefault(); const member = members.find((entry) => entry.id === editingMemberId); if (member) void saveMemberName(member); }} role="dialog">
             <span className="modal-icon">✎</span>
             <h2 id="edit-member-name-title">Edit family member name</h2>
             <p>This name appears to everyone in your family.</p>
             <label>Name<input maxLength={60} onChange={(event) => setMemberNameDraft(event.target.value)} required value={memberNameDraft} /></label>
             <div className="modal-actions">
-              <button disabled={busy || closingEditDialog} onClick={() => closeEditDialog(() => setEditingMemberId(null))} type="button">Cancel</button>
+              <button disabled={busy || closingEditDialog} onClick={() => { const member = members.find((entry) => entry.id === editingMemberId); const baseName = member ? member.display_name || member.email.split("@")[0] : ""; requestEditDialogClose(memberNameDraft.trim() !== baseName, () => setEditingMemberId(null), () => setMemberNameDraft(baseName)); }} type="button">Cancel</button>
               <button disabled={busy || closingEditDialog || !memberNameDraft.trim()} type="submit">{busy ? "Saving…" : "Save"}</button>
             </div>
           </form>
@@ -500,6 +535,13 @@ export default function FamilyPortal({ onClose, cats = [], onManageCats = () => 
           busy={busy}
           onCancel={() => setConfirmation(null)}
           onConfirm={() => { void confirmation.action().finally(() => setConfirmation(null)); }}
+        />}
+        {discardChanges && <ConfirmDialog
+          title="Discard unsaved changes?"
+          description="Your changes haven’t been saved. Leaving now will discard them."
+          confirmLabel="Discard changes"
+          onCancel={() => setDiscardChanges(null)}
+          onConfirm={() => { const discard = discardChanges.action; setDiscardChanges(null); discard(); }}
         />}
       </section>
     </div>

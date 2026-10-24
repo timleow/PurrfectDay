@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Session } from "@supabase/supabase-js";
 import CareIcon, { type IconName } from "./components/CareIcon";
 import AnalyticsPage from "./components/AnalyticsPage";
 import FamilyPortal from "./components/FamilyPortal";
-import CatsOverview from "./components/CatsOverview";
 import ConfirmDialog from "./components/ConfirmDialog";
 import SignInScreen from "./components/SignInScreen";
 import { blobToDataUrl, compressCatPhoto, cropCatPhoto } from "./data/catPhoto";
@@ -13,6 +13,7 @@ import type { CareLog, TrackableKey } from "./data/careLogBatching";
 import { debounce } from "./data/debounce";
 import { clearWorkspaceCache, readWorkspaceCache, writeWorkspaceCache } from "./data/workspaceCache";
 import { canUndoCareAction, undoNumericDelta, undoWetFoodDelta } from "./data/undoCareAction";
+import { moveCareAction } from "./data/careActionOrder";
 import {
   addCat as addCloudCat,
   getCatPhotoUrl,
@@ -23,6 +24,7 @@ import {
   listTargets,
   recordCareEvent,
   saveTarget,
+  saveFamilyCareActions,
   archiveCat as archiveCloudCat,
   updateCat as updateCloudCat,
   uploadCatPhoto,
@@ -31,6 +33,7 @@ import {
   type Family,
   type FamilyMember,
   type TargetRule,
+  type CareActionConfig,
 } from "./data/familyService";
 import { isSupabaseConfigured, supabase } from "./data/supabase";
 
@@ -45,6 +48,7 @@ type Cat = {
 };
 
 type Tracker = {
+  [key: string]: number | boolean | string;
   treats: number;
   kibble: number;
   cans: number;
@@ -64,16 +68,74 @@ type Tracker = {
 type PendingCareAction = {
   id: string;
   catId: string;
-  metric: TrackableKey;
+  metric: string;
   amountDelta: number;
   timestamp: string;
   eventId?: string;
 };
 
-type FoodGoalKey = "treatsGoal" | "kibbleGoal" | "cansGoal";
-type UndoAction = { id: string; eventId: string; catId: number | string; metric: TrackableKey; amountDelta: number; actorUserId?: string; timestamp: number };
+type UndoAction = { id: string; eventId: string; catId: number | string; metric: string; amountDelta: number; actorUserId?: string; timestamp: number };
 
-const tileLabels: Record<TrackableKey, string> = {
+type PickerOption = { value: string; label: string; icon: IconName };
+const actionIconOptions: Array<PickerOption & { animation: CareActionConfig["animation"] }> = [
+  { value: "paw", label: "Paw", icon: "paw", animation: "paw" },
+  { value: "heart", label: "Heart", icon: "heart", animation: "subtle" },
+  { value: "bowl", label: "Food bowl", icon: "bowl", animation: "chomp" },
+  { value: "treat", label: "Dental treat", icon: "treat", animation: "chomp" },
+  { value: "medical", label: "Wet food", icon: "medical", animation: "chomp" },
+  { value: "drop", label: "Water drop", icon: "drop", animation: "water" },
+  { value: "ear", label: "Ear", icon: "ear", animation: "ears" },
+  { value: "yarn", label: "Yarn toy", icon: "yarn", animation: "play" },
+  { value: "poop", label: "Poop", icon: "poop", animation: "poop" },
+  { value: "pee", label: "Pee", icon: "pee", animation: "pee" },
+  { value: "sparkle", label: "Sparkle", icon: "sparkle", animation: "playful" },
+  { value: "play", label: "Playtime", icon: "play", animation: "play" },
+  { value: "check", label: "Done", icon: "check", animation: "subtle" },
+  { value: "outside", label: "Outside time", icon: "outside", animation: "outside" },
+  { value: "chewToy", label: "Chew toy", icon: "chewToy", animation: "chomp" },
+];
+const actionColors = [
+  { value: "treat-green", label: "Garden green", icon: "sparkle" as IconName },
+  { value: "kibble-brown", label: "Biscuit brown", icon: "bowl" as IconName },
+  { value: "wet-beige", label: "Cream", icon: "heart" as IconName },
+  { value: "aqua", label: "Water blue", icon: "drop" as IconName },
+  { value: "berry", label: "Berry pink", icon: "heart" as IconName },
+  { value: "lilac", label: "Lilac", icon: "sparkle" as IconName },
+  { value: "blueberry", label: "Blueberry", icon: "drop" as IconName },
+  { value: "peachy", label: "Peach", icon: "sun" as IconName },
+  { value: "purple", label: "Lavender", icon: "yarn" as IconName },
+];
+const behaviorOptions: PickerOption[] = [{ value: "numeric", label: "Number counter", icon: "chart" }, { value: "percentage", label: "Percentage", icon: "chart" }, { value: "toggle", label: "Done / undone", icon: "check" }];
+const targetOptions: PickerOption[] = [{ value: "none", label: "No target", icon: "minus" }, { value: "daily", label: "Daily", icon: "calendar" }, { value: "weekly", label: "Weekly", icon: "calendar" }, { value: "monthly", label: "Monthly", icon: "calendar" }];
+
+function ChoicePicker({ label, value, options, onChange }: { label: string; value: string; options: PickerOption[]; onChange: (value: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const selected = options.find((option) => option.value === value) ?? options[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => { if (!rootRef.current?.contains(event.target as Node)) setOpen(false); };
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", onKeyDown);
+    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", onKeyDown); };
+  }, [open]);
+
+  return <div className="choice-picker" ref={rootRef}>
+    <span className="choice-picker-label">{label}</span>
+    <button aria-expanded={open} aria-haspopup="listbox" className="choice-picker-trigger" onClick={() => setOpen((isOpen) => !isOpen)} type="button">
+      <span className="choice-picker-selection"><Icon name={selected.icon} size={19} />{selected.label}</span><span className="choice-picker-chevron"><Icon name="chevron" size={16} /></span>
+    </button>
+    {open && <div aria-label={label} className="choice-picker-options" role="listbox">
+      {options.map((option) => <button aria-selected={option.value === value} className="choice-picker-option" key={option.value} onClick={() => { onChange(option.value); setOpen(false); }} role="option" type="button">
+        <Icon name={option.icon} size={19} /><span>{option.label}</span>{option.value === value && <span className="choice-picker-check"><Icon name="check" size={16} /></span>}
+      </button>)}
+    </div>}
+  </div>;
+}
+
+const tileLabels: Partial<Record<TrackableKey, string>> = {
   treats: "Treats",
   kibble: "Kibble",
   cans: "Wet food",
@@ -85,7 +147,7 @@ const tileLabels: Record<TrackableKey, string> = {
   played: "Play",
 };
 
-const metricIcons: Record<TrackableKey, IconName> = {
+const metricIcons: Partial<Record<TrackableKey, IconName>> = {
   treats: "treat",
   kibble: "bowl",
   cans: "medical",
@@ -97,7 +159,7 @@ const metricIcons: Record<TrackableKey, IconName> = {
   played: "yarn",
 };
 
-const metricColorClasses: Record<TrackableKey, string> = {
+const metricColorClasses: Partial<Record<TrackableKey, string>> = {
   treats: "treat-green",
   kibble: "kibble-brown",
   cans: "wet-beige",
@@ -109,7 +171,7 @@ const metricColorClasses: Record<TrackableKey, string> = {
   played: "purple",
 };
 
-const databaseMetrics: Record<TrackableKey, string> = {
+const databaseMetrics: Partial<Record<TrackableKey, string>> = {
   treats: "treats",
   kibble: "kibble",
   cans: "wet_food",
@@ -122,8 +184,97 @@ const databaseMetrics: Record<TrackableKey, string> = {
 };
 
 const appMetrics = Object.fromEntries(Object.entries(databaseMetrics).map(([appKey, dbKey]) => [dbKey, appKey])) as Record<string, TrackableKey>;
+const defaultCareActions: CareActionConfig[] = [
+  { key: "treats", name: "Dental treats", shortName: "Treats", icon: "treat", color: "treat-green", unit: "treats", behavior: "numeric", targetCadence: "daily", targetAmount: 4, animation: "playful" },
+  { key: "kibble", name: "Spoons of kibble", shortName: "Kibble", icon: "bowl", color: "kibble-brown", unit: "spoons", behavior: "numeric", targetCadence: "daily", targetAmount: 3, animation: "playful" },
+  { key: "cans", name: "Cans of wet food", shortName: "Wet food", icon: "medical", color: "wet-beige", unit: "cans", behavior: "numeric", targetCadence: "daily", targetAmount: 1, animation: "playful" },
+  { key: "fountain", name: "Fountain top-up", shortName: "Water", icon: "drop", color: "aqua", unit: "times", behavior: "numeric", targetCadence: "none", targetAmount: null, animation: "playful" },
+  { key: "teethPawing", name: "Pawing at teeth", shortName: "Teeth", icon: "paw", color: "berry", unit: "times", behavior: "numeric", targetCadence: "none", targetAmount: null, animation: "playful" },
+  { key: "ears", name: "Ears cleaned", shortName: "Ears", icon: "ear", color: "peachy", unit: "times", behavior: "toggle", targetCadence: "weekly", targetAmount: 1, animation: "playful" },
+  { key: "played", name: "Playtime", shortName: "Play", icon: "play", color: "purple", unit: "sessions", behavior: "numeric", targetCadence: "none", targetAmount: null, animation: "play" },
+  { key: "pooped", name: "Pooped today", shortName: "Poop", icon: "poop", color: "lilac", unit: "times", behavior: "numeric", targetCadence: "none", targetAmount: null, animation: "playful" },
+  { key: "peed", name: "Peed today", shortName: "Pee", icon: "pee", color: "blueberry", unit: "times", behavior: "numeric", targetCadence: "none", targetAmount: null, animation: "playful" },
+];
+const legacyAnimationByAction: Record<string, CareActionConfig["animation"]> = {
+  treats: "chomp", kibble: "chomp", cans: "chomp", played: "play", fountain: "water",
+  peed: "pee", pooped: "poop", teethPawing: "paw", ears: "ears",
+};
 
-function trackerFromCloud(catId: string, events: CareEvent[], targets: TargetRule[], timezone: string): Tracker {
+function actionTapAnimation(action: CareActionConfig): CareActionConfig["animation"] {
+  return action.animation === "playful"
+    ? action.key === "cans" && action.targetCadence !== "daily" ? "playful" : legacyAnimationByAction[action.key] ?? "playful"
+    : action.animation;
+}
+
+function CareActionPreview({ action, onEditAppearance }: { action: CareActionConfig; onEditAppearance: () => void }) {
+  const [amount, setAmount] = useState(0);
+  const [toggleDone, setToggleDone] = useState(false);
+  const [burst, setBurst] = useState(0);
+  const animation = actionTapAnimation(action);
+  const goal = action.targetCadence === "none" ? undefined : Number(action.targetAmount ?? 1);
+  const currentAmount = action.behavior === "toggle" ? Number(toggleDone) : amount;
+  const isWetFoodPercentage = action.key === "cans" && action.targetCadence === "daily";
+  const displayAmount = isWetFoodPercentage
+    ? `${Math.floor(amount)}${Math.round((amount % 1) * 100) ? ` · ${Math.round((amount % 1) * 100)}%` : ""}`
+    : action.behavior === "percentage" ? `${Math.round(currentAmount)}%`
+      : Number.isInteger(currentAmount) ? String(currentAmount) : currentAmount.toFixed(1);
+  const tap = () => {
+    if (action.behavior === "toggle") setToggleDone((value) => !value);
+    else setAmount((value) => value + (isWetFoodPercentage ? 0.1 : action.behavior === "percentage" ? 10 : 1));
+    setBurst((value) => value + 1);
+  };
+
+  return <div aria-label="Interactive care action preview" className={`care-action-preview-box ${action.color} metric-${action.key}`}>
+    <button aria-label="Change care action icon and colour" className="care-action-preview-icon is-editable" onClick={onEditAppearance} title="Change icon and colour" type="button"><Icon name={action.icon as IconName} size={32} /></button>
+    <strong className="care-action-preview-name">{action.shortName.trim() || action.name.trim() || "Care action"}</strong>
+    {action.behavior === "toggle" ? <span className="care-action-preview-count">{toggleDone ? "Done" : "Not yet"}{goal ? ` · ${action.targetCadence}` : ""}</span> : <span className="care-action-preview-count">{displayAmount}{goal ? ` / ${goal}${action.behavior === "percentage" && !isWetFoodPercentage ? "%" : ""}` : !isWetFoodPercentage && action.behavior !== "percentage" && action.unit ? ` ${action.unit}` : ""}</span>}
+    {goal && <GoalProgress className="care-action-preview-progress" value={currentAmount} goal={goal} />}
+    <button className="tap-prompt" onClick={tap} type="button"><Icon name={action.behavior === "toggle" && toggleDone ? "check" : "plus"} size={16} />{action.behavior === "toggle" ? toggleDone ? "Tap to undo" : "Tap when done" : isWetFoodPercentage || action.behavior === "percentage" ? "Tap to add 10%" : "Tap to add one"}</button>
+    {burst > 0 && animation !== "none" && <div aria-hidden="true" className={`metric-scene tap-animation-${animation} variant-${burst % 3}`} key={burst}>
+      {animation === "chomp" && <div className="chomp-cat"><span className="chomp-ear left" /><span className="chomp-ear right" /><i className="chomp-eye left" /><i className="chomp-eye right" /><b className="chomp-mouth"><i /></b><em className="food-bit" /></div>}
+      {animation === "play" && <div className="play-scene"><i className="string" /><b className="toy" /><span className="swipe-paw"><i /><i /><i /></span></div>}
+      {animation === "outside" && <div className="outside-scene"><Icon name="catLounging" size={72} /><i /></div>}
+      {animation === "pee" && <div className="pee-scene"><Icon name="pee" size={58} /></div>}
+      {animation === "water" && <div className="droplet-scene"><i /><i /><i /><i /><i /></div>}
+      {animation === "poop" && <div className="poop-scene"><span className="poop"><i /><i /><i /></span><b className="fly fly-one"><i /></b><b className="fly fly-two"><i /></b></div>}
+      {animation === "paw" && <div className="paw-scene"><Icon name="paw" size={54} /><i /><i /></div>}
+      {animation === "ears" && <div className="ear-scene"><Icon name="ear" size={60} /><i className="ear-drop ear-drop-left" /><i className="ear-drop ear-drop-right" /></div>}
+      <div className="tap-burst"><b>{action.behavior === "toggle" ? toggleDone ? "Done!" : "Undo" : isWetFoodPercentage || action.behavior === "percentage" ? "+10%" : "+1"}</b><i /><i /><i /><i /><i /></div>
+    </div>}
+  </div>;
+}
+
+function metricToDatabase(key: string) { return databaseMetrics[key as TrackableKey] ?? key; }
+function metricFromDatabase(metric: string): string { return appMetrics[metric] ?? metric; }
+function careActionFor(actions: CareActionConfig[], key: string) { return actions.find((action) => action.key === key); }
+function usesPercentageQuantifier(action: CareActionConfig) { return action.behavior === "percentage"; }
+function readHiddenCareActionKeys() {
+  try { return JSON.parse(localStorage.getItem("purrfect-hidden-care-actions") ?? "[]") as string[]; }
+  catch { return []; }
+}
+function mergeCareActions(saved?: CareActionConfig[] | null, deletedKeys: string[] = []): CareActionConfig[] {
+  const hiddenKeys = new Set([ ...deletedKeys, ...(saved ?? []).filter((action) => action.deleted).map((action) => action.key) ]);
+  const merged = defaultCareActions.filter((action) => !hiddenKeys.has(action.key)).map((action) => ({ ...action }));
+  for (const action of saved ?? []) {
+    if (action.deleted) continue;
+    const index = merged.findIndex((item) => item.key === action.key);
+    if (index >= 0) merged[index] = { ...merged[index], ...action, animation: action.animation ?? "playful" };
+    else if (action.key && action.key.startsWith("custom:")) merged.push({ ...action, animation: action.animation ?? "playful" });
+  }
+  if (saved?.length) {
+    const savedOrder = new Map(saved.map((action, index) => [action.key, index]));
+    return merged.map((action, index) => ({ action, index })).sort((left, right) => {
+      const leftOrder = savedOrder.get(left.action.key);
+      const rightOrder = savedOrder.get(right.action.key);
+      if (leftOrder === undefined) return rightOrder === undefined ? left.index - right.index : 1;
+      if (rightOrder === undefined) return -1;
+      return leftOrder - rightOrder;
+    }).map(({ action }) => action);
+  }
+  return merged;
+}
+
+function trackerFromCloud(catId: string, events: CareEvent[], targets: TargetRule[], timezone: string, actions: CareActionConfig[] = defaultCareActions): Tracker {
   const window = getFamilyCareWindow(timezone);
   const dayStart = new Date(window.todayFrom).getTime();
   const tomorrow = new Date(window.tomorrowFrom).getTime();
@@ -132,7 +283,7 @@ function trackerFromCloud(catId: string, events: CareEvent[], targets: TargetRul
   const sum = (metric: string, from: number, until: number) => catEvents
     .filter((event) => event.metric === metric && new Date(event.occurred_at).getTime() >= from && new Date(event.occurred_at).getTime() < until)
     .reduce((total, event) => total + Number(event.amount_delta), 0);
-  const goal = (metric: string, cadence: "daily" | "weekly", fallback: number) => {
+  const goal = (metric: string, cadence: "daily" | "weekly" | "monthly", fallback: number) => {
     const rule = targets
       .filter((item) => item.cat_id === catId && item.metric === metric && item.cadence === cadence && item.effective_from <= window.today && (!item.effective_until || item.effective_until >= window.today))
       .sort((left, right) => right.effective_from.localeCompare(left.effective_from))[0];
@@ -140,6 +291,26 @@ function trackerFromCloud(catId: string, events: CareEvent[], targets: TargetRul
   };
   const wetAmount = Math.max(0, sum("wet_food", dayStart, tomorrow));
   const wholeCans = Math.floor(wetAmount + 0.000001);
+  const dynamicEntries = actions.flatMap((action) => {
+    let from = dayStart;
+    if (action.targetCadence === "weekly") from = weekStart;
+    if (action.targetCadence === "monthly") from = new Date(startOfDayInZone(`${window.today.slice(0, 7)}-01`, timezone)).getTime();
+    const total = sum(metricToDatabase(action.key), from, tomorrow);
+    const value = action.behavior === "toggle"
+      ? total > 0
+      : action.key === "cans" && action.targetCadence === "daily"
+        ? wholeCans
+        : Math.max(0, total);
+    const entry: Array<[string, number | boolean]> = [[action.key, value]];
+    if (action.key === "cans") entry.push(["canProgress", action.targetCadence === "daily" ? Math.round((wetAmount - wholeCans) * 100) : 0]);
+    if (action.targetCadence !== "none" && action.targetAmount) {
+      const cadence = action.targetCadence === "weekly" ? "weekly" : action.targetCadence === "monthly" ? "monthly" : "daily";
+      const targetMetric = metricToDatabase(action.key);
+      entry.push([`${action.key}Goal`, goal(targetMetric, cadence, action.targetAmount)]);
+    }
+    return entry;
+  });
+  const dynamicValues = Object.fromEntries(dynamicEntries);
   return {
     ...emptyTracker,
     treats: Math.max(0, sum("treats", dayStart, tomorrow)),
@@ -156,6 +327,7 @@ function trackerFromCloud(catId: string, events: CareEvent[], targets: TargetRul
     ears: sum("ear_cleaning", weekStart, tomorrow) > 0,
     earsWeek: sum("ear_cleaning", weekStart, tomorrow) > 0 ? window.weekStart : "",
     played: Math.max(0, sum("play", dayStart, tomorrow)),
+    ...dynamicValues,
   };
 }
 
@@ -163,15 +335,16 @@ function careLogsFromCloud(events: CareEvent[], members: FamilyMember[], userId:
   const endOfToday = new Date(getFamilyCareWindow(timezone).tomorrowFrom);
   const actorNames = new Map(members.map((member) => [member.user_id, member.display_name || member.email.split("@")[0]]));
   return events.filter((event) => new Date(event.occurred_at) < endOfToday).flatMap((event) => {
-    const metric = appMetrics[event.metric];
-    if (!metric) return [];
+    const metric = metricFromDatabase(event.metric);
     return [{
       id: event.id,
       catId: event.cat_id,
       metric,
+      icon: event.action_icon_snapshot ?? undefined,
+      unit: event.action_unit_snapshot ?? event.unit,
       actorUserId: event.actor_user_id,
       who: actorNames.get(event.actor_user_id) ?? (event.actor_user_id === userId ? fallbackName : "Family member"),
-      what: metricLabels[metric],
+      what: event.action_name_snapshot ?? metricLabels[metric] ?? careActionFor(defaultCareActions, metric)?.name ?? metric,
       detail: event.detail,
       timestamp: event.occurred_at,
       amountDelta: Number(event.amount_delta),
@@ -180,7 +353,7 @@ function careLogsFromCloud(events: CareEvent[], members: FamilyMember[], userId:
   });
 }
 
-function applyCareAction(tracker: Tracker, metric: TrackableKey, amountDelta: number): Tracker {
+function applyCareAction(tracker: Tracker, metric: string, amountDelta: number): Tracker {
   if (metric === "cans") {
     const amount = Math.max(0, tracker.cans + tracker.canProgress / 100 + amountDelta);
     const cans = Math.floor(amount + 0.000001);
@@ -204,7 +377,7 @@ function conciseLogAction(detail: string) {
   return detail;
 }
 
-const breakdownQuestions: Record<TrackableKey, string> = {
+const breakdownQuestions: Partial<Record<TrackableKey, string>> = {
   treats: "Who fed?",
   kibble: "Who fed?",
   cans: "Who fed?",
@@ -267,15 +440,17 @@ function CatAvatar({
   cat: Cat;
   size?: "normal" | "large";
 }) {
+  const [loadedUrl, setLoadedUrl] = useState("");
+  const [failedUrl, setFailedUrl] = useState("");
+  const loaded = Boolean(cat.photo && loadedUrl === cat.photo);
+  const failed = Boolean(cat.photo && failedUrl === cat.photo);
+
   return (
     <div
-      className={`cat-avatar ${size === "large" ? "cat-avatar-large" : ""}`}
+      className={`cat-avatar ${size === "large" ? "cat-avatar-large" : ""}${cat.photo && !loaded && !failed ? " is-loading" : ""}`}
       style={{ "--cat-color": cat.color } as React.CSSProperties}
     >
-      {cat.photo ? (
-        <img className="cat-photo" src={cat.photo} alt={`${cat.name}`} />
-      ) : (
-        <>
+      <span className={`cat-avatar-fallback${loaded ? " is-hidden" : ""}`}>
           <span className="cat-ear cat-ear-left" />
           <span className="cat-ear cat-ear-right" />
           <span className="cat-face">
@@ -283,8 +458,17 @@ function CatAvatar({
             <b>{cat.initial}</b>
             <i />
           </span>
-        </>
-      )}
+      </span>
+      {cat.photo && !failed && <img
+        alt={cat.name}
+        className={`cat-photo${loaded ? " is-loaded" : ""}`}
+        decoding="async"
+        key={cat.photo}
+        loading="lazy"
+        onError={() => setFailedUrl(cat.photo ?? "")}
+        onLoad={() => setLoadedUrl(cat.photo ?? "")}
+        src={cat.photo}
+      />}
     </div>
   );
 }
@@ -504,8 +688,8 @@ function CareLogPanel({
         <ol className="activity-log-list">
           {visibleLogs.map((entry) => (
             <li key={entry.id}>
-              <span className={`activity-log-dot ${metricColorClasses[getLogMetric(entry)]} metric-${getLogMetric(entry)}`}><Icon name={metricIcons[getLogMetric(entry)]} size={13} /></span>
-              <div><strong>{tileLabels[getLogMetric(entry)]}</strong><small>{conciseLogAction(entry.detail)} · by {entry.who}</small></div>
+              <span className={`activity-log-dot ${metricColorClasses[getLogMetric(entry)] ?? "aqua"} metric-${getLogMetric(entry)}`}><Icon name={(entry.icon as IconName) ?? metricIcons[getLogMetric(entry)] ?? "paw"} size={13} /></span>
+              <div><strong>{entry.what || tileLabels[getLogMetric(entry)] || getLogMetric(entry)}</strong><small>{conciseLogAction(entry.detail)} · by {entry.who}</small></div>
               <time dateTime={entry.timestamp}>{dateTimeFormat.format(new Date(entry.timestamp))}</time>
             </li>
           ))}
@@ -654,17 +838,20 @@ export default function App() {
   const [showAddCat, setShowAddCat] = useState(false);
   const [addCatBusy, setAddCatBusy] = useState(false);
   const addCatBusyRef = useRef(false);
-  const [activeTab, setActiveTab] = useState<"care" | "cats" | "analytics" | "family">("care");
-  const [analyticsInitialRange, setAnalyticsInitialRange] = useState<"day" | "week">("week");
-  const [showQuotas, setShowQuotas] = useState(false);
-  const [goalDrafts, setGoalDrafts] = useState<Record<FoodGoalKey, string>>({ treatsGoal: "4", kibbleGoal: "3", cansGoal: "1" });
+  const [activeTab, setActiveTab] = useState<"care" | "cats" | "family">("care");
+  const [editingCareActions, setEditingCareActions] = useState(false);
+  const [careActionOrderBaseline, setCareActionOrderBaseline] = useState<CareActionConfig[] | null>(null);
+  const [careActionDeletionBaseline, setCareActionDeletionBaseline] = useState<string[] | null>(null);
+  const [showDiscardCareActionOrder, setShowDiscardCareActionOrder] = useState(false);
+  const pendingCareMenuExit = useRef<(() => void) | null>(null);
+  const familyExitGuard = useRef<((action: () => void) => void) | null>(null);
+  const [careActionOrderSaving, setCareActionOrderSaving] = useState(false);
   const [profileEditCatId, setProfileEditCatId] = useState<number | string | null>(null);
   const [profileNameDraft, setProfileNameDraft] = useState("");
   const [profilePhotoDraft, setProfilePhotoDraft] = useState<string | undefined>();
   const [profilePhotoPosition, setProfilePhotoPosition] = useState({ x: 50, y: 50 });
   const [profilePhotoZoom, setProfilePhotoZoom] = useState(1);
   const [profilePhotoLoading, setProfilePhotoLoading] = useState(false);
-  const [profileGoalDrafts, setProfileGoalDrafts] = useState<Record<FoodGoalKey, string>>({ treatsGoal: "4", kibbleGoal: "3", cansGoal: "1" });
   const [profileSaving, setProfileSaving] = useState(false);
   const [newCatName, setNewCatName] = useState("");
   const [newCatPhoto, setNewCatPhoto] = useState<string | undefined>();
@@ -688,6 +875,35 @@ export default function App() {
   const pendingCareEventWrites = useRef(new Map<string, Promise<void>>());
   const cachedUserId = useRef<string | null>(null);
   const [cloudTargets, setCloudTargets] = useState<TargetRule[]>([]);
+  const [careActions, setCareActions] = useState<CareActionConfig[]>(() => {
+    try { return mergeCareActions(JSON.parse(localStorage.getItem("purrfect-care-actions") ?? "[]") as CareActionConfig[], readHiddenCareActionKeys()); }
+    catch { return mergeCareActions(); }
+  });
+  const [careActionDeletions, setCareActionDeletions] = useState<string[]>(readHiddenCareActionKeys);
+  const [pendingCareActionRemoval, setPendingCareActionRemoval] = useState<CareActionConfig | null>(null);
+  const [editingActionKey, setEditingActionKey] = useState<string | null>(null);
+  const [actionDraft, setActionDraft] = useState<CareActionConfig>(defaultCareActions[0]);
+  const [showActionAppearance, setShowActionAppearance] = useState(false);
+  const actionDraftBaseline = useRef("");
+  const profileDraftBaseline = useRef("");
+  const [discardDraft, setDiscardDraft] = useState<{ description: string; discard: () => void } | null>(null);
+  const [actionSaving, setActionSaving] = useState(false);
+  const [draggedActionKey, setDraggedActionKey] = useState<string | null>(null);
+  const careActionLayoutBefore = useRef<Map<string, DOMRect> | null>(null);
+  const careActionDragPreview = useRef<HTMLButtonElement | null>(null);
+  const careActionDrag = useRef<{ key: string; pointerId: number; startX: number; startY: number; offsetX: number; offsetY: number; moved: boolean; lastTargetKey: string | null } | null>(null);
+  const careActionHold = useRef<{ pointerId: number; startX: number; startY: number; timer: number } | null>(null);
+  const longPressActionKey = useRef<{ key: string; expiresAt: number } | null>(null);
+  const suppressActionClick = useRef(false);
+  const clearCareActionDrag = () => {
+    const drag = careActionDrag.current;
+    if (careActionHold.current) window.clearTimeout(careActionHold.current.timer);
+    careActionHold.current = null;
+    careActionDragPreview.current?.remove();
+    careActionDragPreview.current = null;
+    careActionDrag.current = null;
+    if (drag) setDraggedActionKey(null);
+  };
   const [cloudError, setCloudError] = useState("");
   const [cloudRefreshTick, setCloudRefreshTick] = useState(0);
   const [cloudWorkspaceLoading, setCloudWorkspaceLoading] = useState(isSupabaseConfigured);
@@ -714,10 +930,55 @@ export default function App() {
   const catSwipeStart = useRef<{ x: number; y: number } | null>(null);
   const ignoreNextCatTap = useRef(false);
   const addCatExit = useExitAnimation(showAddCat, () => setShowAddCat(false));
-  const quotasExit = useExitAnimation(showQuotas, () => setShowQuotas(false));
+  const actionEditorExit = useExitAnimation(editingActionKey !== null, () => setEditingActionKey(null));
   const profileExit = useExitAnimation(profileEditCatId !== null, () => setProfileEditCatId(null));
   const notificationsExit = useExitAnimation(showNotifications, () => setShowNotifications(false));
   const trackPickerExit = useExitAnimation(showTrackPicker, () => setShowTrackPicker(false));
+
+  const requestDiscardableClose = (dirty: boolean, close: () => void, reset: () => void, description: string) => {
+    if (!dirty) { close(); return; }
+    setDiscardDraft({ description, discard: () => { reset(); close(); } });
+  };
+
+  useLayoutEffect(() => {
+    const before = careActionLayoutBefore.current;
+    careActionLayoutBefore.current = null;
+    if (!before) return;
+    document.querySelectorAll<HTMLElement>(".care-action-tile-wrap[data-action-key]").forEach((element) => {
+      const key = element.dataset.actionKey;
+      if (!key || key === draggedActionKey) return;
+      const previous = before.get(key);
+      if (!previous) return;
+      const current = element.getBoundingClientRect();
+      const deltaX = previous.left - current.left;
+      const deltaY = previous.top - current.top;
+      if (Math.abs(deltaX) < 1 && Math.abs(deltaY) < 1) return;
+      element.animate(
+        [{ transform: `translate(${deltaX}px, ${deltaY}px)` }, { transform: "translate(0, 0)" }],
+        { duration: 220, easing: "cubic-bezier(.2,.8,.2,1)" },
+      );
+    });
+  }, [careActions, draggedActionKey]);
+
+  useEffect(() => {
+    const cleanupPointerDrag = () => {
+      if (careActionHold.current) window.clearTimeout(careActionHold.current.timer);
+      careActionHold.current = null;
+      if (!careActionDrag.current && !careActionDragPreview.current) return;
+      clearCareActionDrag();
+    };
+    document.addEventListener("pointerup", cleanupPointerDrag);
+    document.addEventListener("pointercancel", cleanupPointerDrag);
+    window.addEventListener("blur", cleanupPointerDrag);
+    return () => {
+      document.removeEventListener("pointerup", cleanupPointerDrag);
+      document.removeEventListener("pointercancel", cleanupPointerDrag);
+      window.removeEventListener("blur", cleanupPointerDrag);
+      careActionDragPreview.current?.remove();
+      careActionDragPreview.current = null;
+      careActionDrag.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -726,7 +987,9 @@ export default function App() {
 
   useEffect(() => {
     addCatExit.dismiss();
-    quotasExit.dismiss();
+    clearCareActionDrag();
+    setEditingCareActions(false);
+    actionEditorExit.dismiss();
     profileExit.dismiss();
     notificationsExit.dismiss();
     trackPickerExit.dismiss();
@@ -889,7 +1152,7 @@ export default function App() {
           <ol>{section.entries.map((entry) => {
             const metric = getLogMetric(entry);
             const catName = cats.find((cat) => String(cat.id) === String(entry.catId))?.name ?? "Cat";
-            return <li key={entry.id}><button onClick={() => { setSelectedId(entry.catId); navigateTo("care"); notificationsExit.dismiss(); }} type="button"><span className={`notification-icon ${metricColorClasses[metric]}`}><Icon name={metricIcons[metric]} size={15} /></span><span className="notification-copy"><strong>{entry.who} · {catName}</strong><small>{entry.detail}</small></span><time dateTime={entry.timestamp}>{new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit", timeZone: notificationTimezone }).format(new Date(entry.timestamp))}</time></button></li>;
+            return <li key={entry.id}><button onClick={() => { setSelectedId(entry.catId); navigateTo("care"); notificationsExit.dismiss(); }} type="button"><span className={`notification-icon ${metricColorClasses[metric] ?? "aqua"}`}><Icon name={(entry.icon as IconName) ?? metricIcons[metric] ?? "paw"} size={15} /></span><span className="notification-copy"><strong>{entry.who} · {catName}</strong><small>{entry.what} · {entry.detail}</small></span><time dateTime={entry.timestamp}>{new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit", timeZone: notificationTimezone }).format(new Date(entry.timestamp))}</time></button></li>;
           })}</ol>
         </section>) : <p className="notification-empty">Care check-ins from your family will show here.</p>}
         {unreadNotificationCount > 0 && <footer>{unreadNotificationCount} new {unreadNotificationCount === 1 ? "update" : "updates"}</footer>}
@@ -902,24 +1165,87 @@ export default function App() {
   }, [activeMetric]);
 
   useEffect(() => {
+    localStorage.setItem("purrfect-care-actions", JSON.stringify(careActions));
+  }, [careActions]);
+  useEffect(() => {
+    localStorage.setItem("purrfect-hidden-care-actions", JSON.stringify(careActionDeletions));
+  }, [careActionDeletions]);
+
+  const requestCareMenuExit = (after?: () => void) => {
+    const hasOrderChanges = Boolean(careActionOrderBaseline && (
+      careActionOrderBaseline.length !== careActions.length ||
+      careActionOrderBaseline.some((action, index) => action.key !== careActions[index]?.key) ||
+      (careActionDeletionBaseline ?? []).join("|") !== careActionDeletions.join("|")
+    ));
+    const exit = after ?? (() => trackPickerExit.dismiss());
+    if (editingCareActions && hasOrderChanges) {
+      pendingCareMenuExit.current = exit;
+      setShowDiscardCareActionOrder(true);
+      return;
+    }
+    clearCareActionDrag();
+    setEditingCareActions(false);
+    setCareActionOrderBaseline(null);
+    setCareActionDeletionBaseline(null);
+    exit();
+  };
+
+  const discardCareActionOrder = () => {
+    clearCareActionDrag();
+    if (careActionOrderBaseline) setCareActions(careActionOrderBaseline);
+    if (careActionDeletionBaseline) setCareActionDeletions(careActionDeletionBaseline);
+    setEditingCareActions(false);
+    setCareActionOrderBaseline(null);
+    setCareActionDeletionBaseline(null);
+    setShowDiscardCareActionOrder(false);
+    const exit = pendingCareMenuExit.current;
+    pendingCareMenuExit.current = null;
+    exit?.();
+  };
+
+  useEffect(() => {
+    if (!careActions.some((action) => action.key === activeMetric)) setActiveMetric((careActions[0]?.key ?? "treats") as TrackableKey);
+  }, [careActions, activeMetric]);
+
+  useEffect(() => {
+    if (showTrackPicker) return;
+    careActionDragPreview.current?.remove();
+    careActionDragPreview.current = null;
+    if (careActionDrag.current) setDraggedActionKey(null);
+    careActionDrag.current = null;
+  }, [showTrackPicker]);
+
+  useEffect(() => {
     if (!showTrackPicker || trackPickerExit.closing) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") trackPickerExit.dismiss();
+      if (event.key === "Escape") requestCareMenuExit();
     };
     document.addEventListener("keydown", closeOnEscape);
     return () => document.removeEventListener("keydown", closeOnEscape);
   }, [showTrackPicker, trackPickerExit.closing]);
 
-  const navigateTo = (nextTab: "care" | "cats" | "analytics" | "family") => {
+  const navigateToRaw = (nextTab: "care" | "cats" | "family") => {
     if (nextTab === activeTab) return;
-    setActiveTab(nextTab);
+    if (showTrackPicker) requestCareMenuExit(() => setActiveTab(nextTab));
+    else setActiveTab(nextTab);
+  };
+  const navigateTo = (nextTab: "care" | "cats" | "family") => {
+    if (activeTab === "family" && nextTab !== "family" && familyExitGuard.current) {
+      familyExitGuard.current(() => navigateToRaw(nextTab));
+      return;
+    }
+    navigateToRaw(nextTab);
   };
 
   const returnToCare = () => navigateTo("care");
 
   const selectedCat = cats.find((cat) => cat.id === selectedId) ?? cats[0] ?? { id: "", name: "Your cat", color: "#79B8A9", initial: "?" };
+  const analyticsGoals = useMemo(() => Object.fromEntries(cats.map((cat) => {
+    const current = { ...emptyTracker, ...(trackers[String(cat.id)] ?? {}) };
+    return [String(cat.id), { treatsGoal: current.treatsGoal, kibbleGoal: current.kibbleGoal, cansGoal: current.cansGoal }];
+  })), [cats, trackers]);
   const savedTracker = { ...emptyTracker, ...(trackers[selectedId] ?? {}) };
-  const tracker = {
+  const tracker: Tracker = {
     ...savedTracker,
     ears: savedTracker.earsWeek === (cloudFamily ? getFamilyCareWindow(cloudFamily.timezone).weekStart : getLocalWeekKey()) && savedTracker.ears,
   };
@@ -997,6 +1323,9 @@ export default function App() {
         if (localCats.length === 0) setActiveTab("cats");
         setTrackers(loadTrackers(localStorage.getItem("purrfect-trackers")));
         setCareLogs(localLogs ? JSON.parse(localLogs) as CareLog[] : []);
+        const hiddenActions = readHiddenCareActionKeys();
+        setCareActionDeletions(hiddenActions);
+        setCareActions(mergeCareActions(JSON.parse(localStorage.getItem("purrfect-care-actions") ?? "[]") as CareActionConfig[], hiddenActions));
       }
       return;
     }
@@ -1012,12 +1341,15 @@ export default function App() {
         const cachedCats: Cat[] = cached.cats.map((cat) => ({ id: cat.id, name: cat.name, color: cat.color, initial: cat.initial, photo: cat.photo }));
         const fallbackName = cloudSession.user.email?.split("@")[0] ?? "Family member";
         setCloudFamily(cached.family);
+        const hiddenActions = cached.family.care_actions?.filter((action) => action.deleted).map((action) => action.key) ?? [];
+        setCareActionDeletions(hiddenActions);
+        setCareActions(mergeCareActions(cached.family.care_actions));
         setCloudMembers(cached.members);
         setCloudEvents(cached.events);
         setCloudTargets(cached.targets);
         setCats(cachedCats);
         setCareLogs(careLogsFromCloud(cached.events, cached.members, userId, fallbackName, cached.family.timezone));
-        setTrackers(Object.fromEntries(cached.cats.map((cat) => [cat.id, trackerFromCloud(cat.id, cached.events, cached.targets, cached.family.timezone)])));
+        setTrackers(Object.fromEntries(cached.cats.map((cat) => [cat.id, trackerFromCloud(cat.id, cached.events, cached.targets, cached.family.timezone, mergeCareActions(cached.family.care_actions))])));
         setSelectedId((selected) => cachedCats.some((cat) => cat.id === selected) ? selected : cachedCats[0]?.id ?? "");
         if (!cachedCats.length) setActiveTab("cats");
         setCloudWorkspaceLoading(false);
@@ -1030,6 +1362,8 @@ export default function App() {
         if (!family) {
           clearWorkspaceCache(userId);
           setCloudFamily(null);
+          setCareActionDeletions([]);
+          setCareActions(mergeCareActions());
           setCloudMembers([]);
           setCloudEvents([]);
           setCloudTargets([]);
@@ -1061,6 +1395,9 @@ export default function App() {
         const actorNames = new Map(members.map((member) => [member.user_id, member.display_name || member.email.split("@")[0]]));
         const appLogs = careLogsFromCloud(events, members, userId, cloudSession.user.email?.split("@")[0] ?? "Family member", family.timezone);
         setCloudFamily(family);
+        const hiddenActions = family.care_actions?.filter((action) => action.deleted).map((action) => action.key) ?? [];
+        setCareActionDeletions(hiddenActions);
+        setCareActions(mergeCareActions(family.care_actions));
         setCloudMembers(members);
         setCloudEvents(events);
         setCloudTargets(targets);
@@ -1083,7 +1420,7 @@ export default function App() {
           const matchingEvent = events.find((event) => {
             if (!unmatchedEventIds.has(event.id)) return false;
             if (event.cat_id !== action.catId || event.actor_user_id !== cloudSession.user.id) return false;
-            if (event.metric !== databaseMetrics[action.metric] || Math.abs(Number(event.amount_delta) - action.amountDelta) > 0.000001) return false;
+            if (event.metric !== metricToDatabase(action.metric) || Math.abs(Number(event.amount_delta) - action.amountDelta) > 0.000001) return false;
             return action.eventId ? event.id === action.eventId : Math.abs(new Date(event.occurred_at).getTime() - new Date(action.timestamp).getTime()) <= 5;
           });
           if (matchingEvent) {
@@ -1096,7 +1433,7 @@ export default function App() {
           pendingByCat.set(action.catId, [...(pendingByCat.get(action.catId) ?? []), action]);
         }
         setTrackers(Object.fromEntries(remoteCats.map((cat) => {
-          const baseTracker = trackerFromCloud(cat.id, events, targets, family.timezone);
+          const baseTracker = trackerFromCloud(cat.id, events, targets, family.timezone, mergeCareActions(family.care_actions));
           const trackerWithPending = (pendingByCat.get(cat.id) ?? []).reduce(
             (current, action) => applyCareAction(current, action.metric, action.amountDelta),
             baseTracker,
@@ -1163,7 +1500,8 @@ export default function App() {
     };
   }, [cloudFamily?.id]);
 
-  const addCareLog = (key: TrackableKey, detail: string, amountDelta?: number, reversesEventId?: string) => {
+  const addCareLog = (key: string, detail: string, amountDelta?: number, reversesEventId?: string) => {
+    const action = careActionFor(careActions, key) ?? defaultCareActions[0];
     const who = cloudFamily && cloudSession
       ? cloudMembers.find((member) => member.user_id === cloudSession.user.id)?.display_name || cloudSession.user.email?.split("@")[0] || "Family member"
       : memberName.trim() || "Family member";
@@ -1187,12 +1525,15 @@ export default function App() {
           id: eventId,
           family_id: cloudFamily.id,
           cat_id: selectedCat.id as string,
-          metric: databaseMetrics[key],
+          metric: metricToDatabase(key),
           amount_delta: inferredDelta,
-          unit: metricUnits[key] ?? "times",
+          unit: action.unit || metricUnits[key as TrackableKey] || "times",
           detail,
           occurred_at: timestamp,
           reverses_event_id: reversesEventId ?? null,
+          action_name_snapshot: action.name,
+          action_icon_snapshot: action.icon,
+          action_unit_snapshot: action.unit,
         });
         const savedAction = pendingCareActions.current.get(pendingAction.id);
         if (savedAction) savedAction.eventId = event.id;
@@ -1200,9 +1541,11 @@ export default function App() {
           id: event.id,
           catId: event.cat_id,
           metric: key,
+          icon: action.icon,
+          unit: action.unit,
           actorUserId: event.actor_user_id,
           who,
-          what: metricLabels[key],
+          what: action.name,
           detail: event.detail,
           timestamp: event.occurred_at,
           amountDelta: Number(event.amount_delta),
@@ -1231,8 +1574,10 @@ export default function App() {
         id: eventId,
         catId: selectedId,
         metric: key,
+        icon: action.icon,
+        unit: action.unit,
         who,
-        what: metricLabels[key],
+        what: action.name,
         detail,
         timestamp,
         amountDelta: amountDelta ?? (detail === "Marked done" ? 1 : detail === "Undid this check-in" ? -1 : undefined),
@@ -1243,7 +1588,7 @@ export default function App() {
     return eventId;
   };
 
-  const queueUndoAction = (catId: number | string, metric: TrackableKey, amountDelta: number, eventId: string) => {
+  const queueUndoAction = (catId: number | string, metric: string, amountDelta: number, eventId: string) => {
     const timestamp = Date.now();
     const action: UndoAction = { id: crypto.randomUUID(), eventId, catId, metric, amountDelta, actorUserId: cloudSession?.user.id, timestamp };
     setUndoActions((current) => [...current.filter((entry) => timestamp - entry.timestamp < 15000), action]);
@@ -1267,14 +1612,15 @@ export default function App() {
           setCloudRefreshTick((tick) => tick + 1);
         });
     }
-    if (key in metricLabels) {
-      const metricKey = key as TrackableKey;
-      const previous = key === "ears" ? tracker.ears : { ...emptyTracker, ...(trackers[selectedId] ?? {}) }[key];
+    if (careActionFor(careActions, String(key))) {
+      const metricKey = String(key);
+      const action = careActionFor(careActions, metricKey)!;
+      const previous = { ...emptyTracker, ...(trackers[selectedId] ?? {}) }[metricKey];
       let amountDelta = 0;
       if (typeof previous === "number" && typeof value === "number" && previous !== value) {
         amountDelta = value - previous;
         const difference = Math.abs(amountDelta);
-        const unit = metricUnits[metricKey] ?? "";
+        const unit = action.unit || "";
         const displayUnit = difference === 1 ? unit.replace(/s$/, "") : unit;
         const eventId = addCareLog(metricKey, `${amountDelta > 0 ? "Added" : "Removed"} ${difference}${displayUnit ? ` ${displayUnit}` : ""}`, amountDelta);
         queueUndoAction(selectedId, metricKey, amountDelta, eventId);
@@ -1295,35 +1641,147 @@ export default function App() {
     }));
   };
 
-  const openGoalEditor = () => {
-    setGoalDrafts({
-      treatsGoal: String(tracker.treatsGoal),
-      kibbleGoal: String(tracker.kibbleGoal),
-      cansGoal: String(tracker.cansGoal),
-    });
-    setShowQuotas(true);
+  const openCareActionManager = () => {
+    setEditingCareActions(false);
+    setCareActionOrderBaseline(null);
+    setCareActionDeletionBaseline(null);
+    setShowTrackPicker(true);
   };
 
-  const saveGoalDrafts = () => {
-    (Object.keys(goalDrafts) as FoodGoalKey[]).forEach((key) => {
-      const value = Number(goalDrafts[key]);
-      if (Number.isFinite(value) && value > 0 && value !== tracker[key]) update(key, value);
+  const openActionEditor = (key?: string) => {
+    const open = () => {
+      const current = key ? careActionFor(careActions, key) : undefined;
+      const draft = current ?? {
+        key: `custom:${crypto.randomUUID()}`,
+        name: "",
+        shortName: "",
+        icon: "play",
+        color: "purple",
+        unit: "times",
+        behavior: "numeric" as const,
+        targetCadence: "none" as const,
+        targetAmount: null,
+        animation: "play" as const,
+      };
+      const currentGoalKey = draft.key === "treats" ? "treatsGoal" : draft.key === "kibble" ? "kibbleGoal" : draft.key === "cans" ? "cansGoal" : draft.key + "Goal";
+      const savedGoal = tracker[currentGoalKey];
+      setActionDraft({ ...draft, targetAmount: draft.targetCadence === "none" ? null : Number(savedGoal ?? draft.targetAmount ?? 1) });
+      setShowActionAppearance(false);
+      actionDraftBaseline.current = JSON.stringify({ ...draft, targetAmount: draft.targetCadence === "none" ? null : Number(savedGoal ?? draft.targetAmount ?? 1) });
+      setEditingActionKey(draft.key);
+    };
+    if (showTrackPicker) { requestCareMenuExit(open); return; }
+    open();
+  };
+
+  const persistCareActions = async (next: CareActionConfig[], deletedKeys = careActionDeletions) => {
+    const hiddenKeys = [...new Set(deletedKeys)];
+    const tombstones = hiddenKeys.flatMap((key) => {
+      const action = careActions.find((entry) => entry.key === key) ?? defaultCareActions.find((entry) => entry.key === key);
+      return action ? [{ ...action, deleted: true }] : [];
     });
-    quotasExit.dismiss();
+    const savedActions = [...next, ...tombstones];
+    if (cloudFamily) {
+      if (cloudSession) clearWorkspaceCache(cloudSession.user.id);
+      await saveFamilyCareActions(cloudFamily.id, savedActions);
+      setCloudFamily({ ...cloudFamily, care_actions: savedActions });
+    }
+    setCareActionDeletions(hiddenKeys);
+    setCareActions(mergeCareActions(savedActions, hiddenKeys));
+  };
+
+  const finishCareActionEditing = async () => {
+    if (careActionOrderSaving) return;
+    const hasOrderChanges = Boolean(careActionOrderBaseline && (
+      careActionOrderBaseline.length !== careActions.length ||
+      careActionOrderBaseline.some((action, index) => action.key !== careActions[index]?.key) ||
+      (careActionDeletionBaseline ?? []).join("|") !== careActionDeletions.join("|")
+    ));
+    if (hasOrderChanges) {
+      setCareActionOrderSaving(true);
+      try {
+        await persistCareActions(careActions);
+      } catch (cause) {
+        setCloudError(errorMessage(cause, "Could not save the care menu order."));
+        return;
+      } finally {
+        setCareActionOrderSaving(false);
+      }
+    }
+    setEditingCareActions(false);
+    setCareActionOrderBaseline(null);
+    setCareActionDeletionBaseline(null);
+  };
+
+  const saveActionDraft = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const name = actionDraft.name.trim();
+    if (!name || actionSaving) return;
+    if (actionDraft.behavior !== "toggle" && actionDraft.targetCadence !== "none" && (!actionDraft.targetAmount || actionDraft.targetAmount < 1 || (actionDraft.behavior === "percentage" && actionDraft.key !== "cans" && actionDraft.targetAmount > 100))) return;
+    const nextAction = {
+      ...actionDraft,
+      name,
+      shortName: name,
+      unit: actionDraft.behavior === "percentage" && actionDraft.key !== "cans" ? "%" : actionDraft.unit,
+      animation: actionDraft.animation ?? "play",
+      targetAmount: actionDraft.targetCadence === "none" ? null : actionDraft.behavior === "toggle" ? 1 : actionDraft.behavior === "percentage" ? 100 : Number(actionDraft.targetAmount),
+    };
+    const next = [...careActions.filter((action) => action.key !== nextAction.key), nextAction];
+    setActionSaving(true);
+    try {
+      if (nextAction.targetCadence !== "none" && nextAction.targetAmount && cloudFamily && typeof selectedCat.id === "string") {
+        const date = getFamilyCareWindow(cloudFamily.timezone).today;
+        await saveTarget(cloudFamily.id, selectedCat.id, metricToDatabase(nextAction.key), nextAction.targetCadence, nextAction.targetAmount, nextAction.unit, date);
+      }
+      if (nextAction.targetCadence !== "none" && nextAction.targetAmount) {
+        const goalKey = nextAction.key === "treats" ? "treatsGoal" : nextAction.key === "kibble" ? "kibbleGoal" : nextAction.key === "cans" ? "cansGoal" : nextAction.key + "Goal";
+        setTrackers((current) => ({ ...current, [selectedId]: { ...emptyTracker, ...(current[String(selectedId)] ?? {}), [goalKey]: nextAction.targetAmount! } }));
+      }
+      await persistCareActions(next);
+      setActiveMetric(nextAction.key);
+      actionDraftBaseline.current = JSON.stringify(nextAction);
+      setShowActionAppearance(false);
+      actionEditorExit.dismiss();
+    } catch (cause) {
+      setCloudError(errorMessage(cause, "Could not save this care action."));
+    } finally {
+      setActionSaving(false);
+    }
+  };
+
+  const removeCareAction = async (action: CareActionConfig) => {
+    if (actionSaving || careActions.length <= 1) return;
+    const next = careActions.filter((entry) => entry.key !== action.key);
+    const deletedKeys = action.key.startsWith("custom:") ? careActionDeletions : [...careActionDeletions, action.key];
+    if (editingCareActions && editingActionKey === null) {
+      setCareActions(next);
+      setCareActionDeletions(deletedKeys);
+      if (activeMetric === action.key) setActiveMetric((next[0]?.key ?? "treats") as TrackableKey);
+      setPendingCareActionRemoval(null);
+      return;
+    }
+    setActionSaving(true);
+    try {
+      await persistCareActions(next, deletedKeys);
+      if (activeMetric === action.key) setActiveMetric((next[0]?.key ?? "treats") as TrackableKey);
+      setShowActionAppearance(false);
+      setPendingCareActionRemoval(null);
+      if (editingActionKey === action.key) actionEditorExit.dismiss();
+    } catch (cause) {
+      setCloudError(errorMessage(cause, "Could not remove this care action."));
+    } finally {
+      setActionSaving(false);
+    }
   };
 
   const completed = useMemo(() => {
-    const checks = [
-      tracker.treats >= tracker.treatsGoal,
-      tracker.kibble >= tracker.kibbleGoal,
-      tracker.cans >= tracker.cansGoal,
-      tracker.fountain > 0,
-      tracker.pooped,
-      tracker.peed,
-      tracker.played > 0,
-    ];
-    return checks.filter(Boolean).length;
-  }, [tracker]);
+    return careActions.filter((action) => {
+      const value = tracker[action.key] ?? (action.behavior === "toggle" ? false : 0);
+      const goal = action.targetCadence !== "none" ? Number(tracker[action.key + "Goal"] ?? action.targetAmount ?? 0) : 0;
+      return goal > 0 ? Number(value) >= goal : typeof value === "boolean" ? value : Number(value) > 0;
+    }).length;
+  }, [tracker, careActions]);
+  const careActionCount = careActions.length;
 
   const addCat = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -1355,7 +1813,7 @@ export default function App() {
         }
         const cat: Cat = { id: created.id, name: created.name, color: created.color, initial: created.name[0].toUpperCase(), photo };
         setCats((current) => [...current, cat]);
-        setTrackers((current) => ({ ...current, [created.id]: trackerFromCloud(created.id, cloudEvents, cloudTargets, cloudFamily.timezone) }));
+        setTrackers((current) => ({ ...current, [created.id]: trackerFromCloud(created.id, cloudEvents, cloudTargets, cloudFamily.timezone, careActions) }));
         setSelectedId(created.id);
         setNewCatName("");
         setNewCatPhoto(undefined);
@@ -1404,12 +1862,12 @@ export default function App() {
   const openCatProfile = (catId: number | string) => {
     const cat = cats.find((entry) => String(entry.id) === String(catId));
     if (!cat) return;
-    const current = { ...emptyTracker, ...(trackers[String(cat.id)] ?? {}) };
+    setSelectedId(cat.id);
     setProfileNameDraft(cat.name);
     setProfilePhotoDraft(cat.photo);
     setProfilePhotoPosition({ x: 50, y: 50 });
     setProfilePhotoZoom(1);
-    setProfileGoalDrafts({ treatsGoal: String(current.treatsGoal), kibbleGoal: String(current.kibbleGoal), cansGoal: String(current.cansGoal) });
+    profileDraftBaseline.current = JSON.stringify({ name: cat.name, photo: cat.photo, position: { x: 50, y: 50 }, zoom: 1 });
     setPhotoError("");
     setProfileEditCatId(cat.id);
   };
@@ -1441,26 +1899,9 @@ export default function App() {
         nextPhoto = undefined;
       }
 
-      const nextGoals = {
-        treatsGoal: Math.max(1, Number(profileGoalDrafts.treatsGoal) || 1),
-        kibbleGoal: Math.max(1, Number(profileGoalDrafts.kibbleGoal) || 1),
-        cansGoal: Math.max(1, Number(profileGoalDrafts.cansGoal) || 1),
-      };
-      const previous = { ...emptyTracker, ...(trackers[String(cat.id)] ?? {}) };
-      if (cloudFamily && typeof cat.id === "string") {
-        if (cloudSession) clearWorkspaceCache(cloudSession.user.id);
-        const changes: Array<[FoodGoalKey, string, string]> = [
-          ["treatsGoal", "treats", "treats"],
-          ["kibbleGoal", "kibble", "spoons"],
-          ["cansGoal", "wet_food", "cans"],
-        ];
-        await Promise.all(changes.filter(([key]) => nextGoals[key] !== previous[key]).map(([, metric, unit]) => saveTarget(
-          cloudFamily.id, cat.id as string, metric, "daily", nextGoals[metric === "treats" ? "treatsGoal" : metric === "kibble" ? "kibbleGoal" : "cansGoal"], unit, getFamilyCareWindow(cloudFamily.timezone).today,
-        )));
-      }
       setCats((current) => current.map((entry) => entry.id === cat.id ? { ...entry, name, initial: name[0]?.toUpperCase() ?? "?", photo: nextPhoto } : entry));
-      setTrackers((current) => ({ ...current, [String(cat.id)]: { ...emptyTracker, ...(current[String(cat.id)] ?? {}), ...nextGoals } }));
       setCloudError("");
+      profileDraftBaseline.current = JSON.stringify({ name, photo: nextPhoto, position: profilePhotoPosition, zoom: profilePhotoZoom });
       profileExit.dismiss();
     } catch (cause) {
       const message = errorMessage(cause, "Could not save this cat profile.");
@@ -1470,6 +1911,28 @@ export default function App() {
       setProfileSaving(false);
     }
   };
+
+  const requestCloseAddCat = () => requestDiscardableClose(
+    Boolean(newCatName.trim() || newCatPhoto),
+    () => addCatExit.dismiss(),
+    () => { setNewCatName(""); setNewCatPhoto(undefined); setNewCatPhotoPosition({ x: 50, y: 50 }); setNewCatPhotoZoom(1); setPhotoError(""); },
+    "Your new cat hasn’t been added. Leaving now will discard the cat details and photo.",
+  );
+  const requestCloseCatProfile = () => {
+    const currentDraft = JSON.stringify({ name: profileNameDraft, photo: profilePhotoDraft, position: profilePhotoPosition, zoom: profilePhotoZoom });
+    requestDiscardableClose(
+      currentDraft !== profileDraftBaseline.current,
+      () => profileExit.dismiss(),
+      () => { setPhotoError(""); },
+      "Your cat profile changes haven’t been saved. Leaving now will discard them.",
+    );
+  };
+  const requestCloseActionEditor = () => requestDiscardableClose(
+    JSON.stringify(actionDraft) !== actionDraftBaseline.current,
+    () => { setShowActionAppearance(false); actionEditorExit.dismiss(); },
+    () => {},
+    "Your care action changes haven’t been saved. Leaving now will discard them.",
+  );
 
   const removeCat = async (cat: Cat) => {
     setPendingCatRemoval(cat);
@@ -1486,6 +1949,7 @@ export default function App() {
       setCats(nextCats);
       setTrackers((current) => { const next = { ...current }; delete next[String(cat.id)]; return next; });
       if (selectedId === cat.id && nextCats[0]) setSelectedId(nextCats[0].id);
+      if (String(profileEditCatId) === String(cat.id)) profileExit.dismiss();
       if (!nextCats.length) setActiveTab("cats");
       setCloudError("");
     } catch (cause) {
@@ -1503,25 +1967,30 @@ export default function App() {
   }).format(new Date());
 
   const mobileMetrics: Array<{
-    key: TrackableKey;
+    key: string;
     label: string;
     shortLabel: string;
     icon: IconName;
     color: string;
     goal?: keyof Tracker;
     unit?: string;
-  }> = [
-    { key: "treats", label: "Dental treats", shortLabel: "Treats", icon: "treat", color: "treat-green", goal: "treatsGoal", unit: "treats" },
-    { key: "kibble", label: "Spoons of kibble", shortLabel: "Kibble", icon: "bowl", color: "kibble-brown", goal: "kibbleGoal", unit: "spoons" },
-    { key: "cans", label: "Cans of wet food", shortLabel: "Wet food", icon: "medical", color: "wet-beige", goal: "cansGoal", unit: "cans" },
-    { key: "fountain", label: "Fountain top-up", shortLabel: "Water", icon: "drop", color: "aqua" },
-    { key: "teethPawing", label: "Pawing at teeth", shortLabel: "Teeth", icon: "paw", color: "berry", unit: "times" },
-    { key: "ears", label: "Ears cleaned", shortLabel: "Ears", icon: "ear", color: "peachy" },
-    { key: "played", label: "Playtime", shortLabel: "Play", icon: "yarn", color: "purple", unit: "session" },
-    { key: "pooped", label: "Pooped today", shortLabel: "Poop", icon: "poop", color: "lilac", unit: "times" },
-    { key: "peed", label: "Peed today", shortLabel: "Pee", icon: "pee", color: "blueberry", unit: "times" },
-  ];
+    targetAmount?: number | null;
+    targetCadence?: CareActionConfig["targetCadence"];
+  }> = careActions.map((action) => ({
+    key: action.key,
+    label: action.name,
+    shortLabel: action.shortName,
+    icon: action.icon as IconName,
+    color: action.color,
+    goal: ({ treats: "treatsGoal", kibble: "kibbleGoal", cans: "cansGoal" } as Partial<Record<string, keyof Tracker>>)[action.key],
+    unit: action.unit,
+    targetAmount: action.targetAmount,
+    targetCadence: action.targetCadence,
+  }));
   const activeItem = mobileMetrics.find((item) => item.key === activeMetric)!;
+  const activeAction = careActionFor(careActions, activeMetric) ?? defaultCareActions[0];
+  const tapAnimation = actionTapAnimation(activeAction);
+  const breakdownQuestion = breakdownQuestions[activeMetric] ?? "Who did this?";
   const switchTrackingMode = (direction: -1 | 1) => {
     setActiveMetric((current) => {
       const index = mobileMetrics.findIndex((item) => item.key === current);
@@ -1565,14 +2034,17 @@ export default function App() {
     setSelectedId(cats[nextIndex].id);
     setShowBreakdown(false);
   };
-  const activeValue = tracker[activeMetric] as number | boolean;
-  const activeGoal = activeItem.goal ? (tracker[activeItem.goal] as number) : undefined;
-  const breakdownAmount = activeMetric === "cans"
+  const activeValue = (tracker[activeMetric] ?? (activeAction.behavior === "toggle" ? false : 0)) as number | boolean;
+  const isToggle = activeAction.behavior === "toggle";
+  const activeGoal = activeAction.targetCadence !== "none"
+    ? Number(tracker[activeMetric + "Goal"] ?? (activeItem.goal ? tracker[activeItem.goal] : undefined) ?? activeItem.targetAmount ?? 0)
+    : undefined;
+  const activeUsesPercentage = usesPercentageQuantifier(activeAction);
+  const breakdownAmount = activeMetric === "cans" && activeAction.targetCadence === "daily" && !isToggle
     ? tracker.cans + tracker.canProgress / 100
     : typeof activeValue === "boolean" ? Number(activeValue) : activeValue;
-  const breakdownAmountLabel = String(Number(breakdownAmount.toFixed(1)));
-  const isToggle = typeof activeValue === "boolean";
-  const isComplete = isToggle ? activeValue : activeGoal ? activeValue >= activeGoal : false;
+  const breakdownAmountLabel = `${Number(breakdownAmount.toFixed(1))}${activeUsesPercentage ? "%" : ""}`;
+  const isComplete = isToggle ? Boolean(activeValue) : activeGoal ? Number(activeValue) >= activeGoal : false;
   const availableUndoActions = undoActions
     .filter((entry) => String(entry.catId) === String(selectedId) && undoNow - entry.timestamp >= 0 && undoNow - entry.timestamp <= 15000 && canUndoCareAction(entry.actorUserId, cloudSession?.user.id))
     .sort((left, right) => right.timestamp - left.timestamp);
@@ -1589,11 +2061,14 @@ export default function App() {
     const isToday = todayWindow
       ? timestamp >= new Date(todayWindow.todayFrom) && timestamp < new Date(todayWindow.tomorrowFrom)
       : timestamp.getFullYear() === now.getFullYear() && timestamp.getMonth() === now.getMonth() && timestamp.getDate() === now.getDate();
-    const isInPeriod = activeMetric === "ears"
+    const isInPeriod = activeAction.targetCadence === "weekly"
       ? todayWindow
         ? timestamp >= new Date(todayWindow.weekFrom) && timestamp < new Date(todayWindow.tomorrowFrom)
         : getLocalWeekKey(timestamp) === getLocalWeekKey(now)
-      : isToday;
+      : activeAction.targetCadence === "monthly"
+        ? todayWindow ? timestamp >= new Date(startOfDayInZone(`${todayWindow.today.slice(0, 7)}-01`, cloudFamily?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone)) && timestamp < new Date(todayWindow.tomorrowFrom)
+          : timestamp.getFullYear() === now.getFullYear() && timestamp.getMonth() === now.getMonth()
+        : isToday;
     const isCareAction = getCareLogDelta(entry) !== undefined
       || entry.detail.startsWith("Completed")
       || entry.detail === "Marked done";
@@ -1601,10 +2076,13 @@ export default function App() {
   });
   const visibleActivityEntries = batchCareLogs(removeUndoneCareLogs(activityEntries));
   const contributionTimeFormat = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
-  const contributionPeriod = activeMetric === "ears" ? "This week" : "Today";
+  const contributionPeriod = activeAction.targetCadence === "weekly" ? "This week" : activeAction.targetCadence === "monthly" ? "This month" : "Today";
 
   const handleBigTap = () => {
-    if (activeMetric === "cans") {
+    if (isToggle) {
+      if (!activeValue && (activeMetric === "peed" || activeMetric === "pooped")) playCareSound(activeMetric === "peed" ? "peed" : "pooped");
+      update(activeMetric, !activeValue);
+    } else if (activeMetric === "cans" && activeAction.targetCadence === "daily") {
       const amountDelta = 0.1;
       const eventId = addCareLog("cans", "Added 10% of a can", amountDelta);
       queueUndoAction(selectedId, "cans", amountDelta, eventId);
@@ -1620,8 +2098,16 @@ export default function App() {
           };
         })(),
       }));
-    } else if (typeof activeValue === "number") {
-      const unit = metricUnits[activeMetric] ?? "";
+    } else if (activeUsesPercentage) {
+      const amountDelta = 10;
+      const eventId = addCareLog(activeMetric, "Added 10%", amountDelta);
+      queueUndoAction(selectedId, activeMetric, amountDelta, eventId);
+      setTrackers((current) => {
+        const latest = { ...emptyTracker, ...(current[selectedId] ?? {}) };
+        return { ...current, [selectedId]: { ...latest, [activeMetric]: Number(latest[activeMetric]) + amountDelta } };
+      });
+    } else {
+      const unit = activeAction.unit || "";
       const displayUnit = unit.replace(/s$/, "");
       const eventId = addCareLog(activeMetric, `Added 1${displayUnit ? ` ${displayUnit}` : ""}`, 1);
       queueUndoAction(selectedId, activeMetric, 1, eventId);
@@ -1629,11 +2115,6 @@ export default function App() {
         const latest = { ...emptyTracker, ...(current[selectedId] ?? {}) };
         return { ...current, [selectedId]: { ...latest, [activeMetric]: Number(latest[activeMetric]) + 1 } };
       });
-    } else {
-      if (!activeValue && (activeMetric === "peed" || activeMetric === "pooped")) {
-        playCareSound(activeMetric);
-      }
-      update(activeMetric, !activeValue);
     }
     setTapBurst((current) => current + 1);
   };
@@ -1643,7 +2124,7 @@ export default function App() {
     if (!action) return;
     setUndoActions((current) => current.filter((entry) => entry.id !== action.id));
     const amountDelta = action.amountDelta;
-    if (action.metric === "cans") {
+    if (action.metric === "cans" && Math.abs(amountDelta) <= 0.100001) {
       setTrackers((current) => ({
         ...current,
         [action.catId]: (() => {
@@ -1656,7 +2137,7 @@ export default function App() {
       addCareLog("cans", `${reverseDetail} ${reverseAmount === 0.1 ? "10% of a can" : `${reverseAmount} cans`}`, -amountDelta, action.eventId);
       return;
     }
-    const unit = metricUnits[action.metric] ?? "";
+    const unit = careActionFor(careActions, action.metric)?.unit ?? metricUnits[action.metric as TrackableKey] ?? "";
     const absoluteDelta = Math.abs(amountDelta);
     const displayUnit = absoluteDelta === 1 ? unit.replace(/s$/, "") : unit;
     const amountText = Number.isInteger(absoluteDelta) ? String(absoluteDelta) : String(Number(absoluteDelta.toFixed(1)));
@@ -1675,7 +2156,7 @@ export default function App() {
       return { ...current, [action.catId]: { ...latest, [action.metric]: undoNumericDelta(latest[action.metric] as number, amountDelta) } };
     });
     const reverseVerb = amountDelta > 0 ? "Removed" : "Added";
-    addCareLog(action.metric, `${reverseVerb} ${amountText}${displayUnit ? ` ${displayUnit}` : ""}`, -amountDelta, action.eventId);
+    addCareLog(action.metric, `${reverseVerb} ${amountText}${displayUnit === "%" ? "%" : displayUnit ? ` ${displayUnit}` : ""}`, -amountDelta, action.eventId);
   };
 
   if (isSupabaseConfigured && (!cloudSession || authLoading)) {
@@ -1760,9 +2241,9 @@ export default function App() {
           <div className="mobile-progress-card">
             <button aria-label="Open care menu" className="mobile-progress-heart" onClick={() => setShowTrackPicker(true)} type="button"><Icon name="heart" size={17} /></button>
             <div>
-              <strong>{completed === 7 ? "All cared for!" : `${completed} of 7 daily cares`}</strong>
+              <strong>{completed === careActionCount ? "All cared for!" : completed + " of " + careActionCount + " cares"}</strong>
               <div className="mobile-progress-track">
-                <i style={{ width: `${Math.max(5, (completed / 7) * 100)}%` }} />
+                <i style={{ width: `${Math.max(5, (completed / Math.max(1, careActionCount)) * 100)}%` }} />
               </div>
             </div>
           </div>
@@ -1773,7 +2254,6 @@ export default function App() {
               <Icon name="more" size={16} />
               Care Menu
             </button>
-            <button className="edit-goals-trigger" onClick={openGoalEditor} type="button"><Icon name="settings" size={15} /> Edit goals</button>
           </div>
 
           <div
@@ -1800,7 +2280,7 @@ export default function App() {
             </div>
             <div className="big-icon"><Icon name={isComplete ? "check" : activeItem.icon} size={43} /></div>
             <p>{activeItem.label}</p>
-            {activeMetric === "cans" ? (
+            {activeMetric === "cans" && activeAction.targetCadence === "daily" && !isToggle ? (
               <div className="wet-food-count">
                 <strong>{tracker.cans} <small>{tracker.cans === 1 ? "can" : "cans"}</small></strong>
                 <div><i style={{ width: `${tracker.canProgress}%` }} /></div>
@@ -1809,26 +2289,26 @@ export default function App() {
               </div>
             ) : isToggle ? (
               <strong>
-                {activeMetric === "ears"
-                  ? activeValue ? "Done this week!" : "Not yet this week"
-                  : activeValue ? "Done today!" : "Not yet"}
+                {activeValue
+                  ? `Done ${activeAction.targetCadence === "weekly" ? "this week" : activeAction.targetCadence === "monthly" ? "this month" : "today"}!`
+                  : `Not yet ${activeAction.targetCadence === "weekly" ? "this week" : activeAction.targetCadence === "monthly" ? "this month" : "today"}`}
               </strong>
             ) : (
               <>
                 <strong className="big-count">
-                  {activeValue}
-                  {activeGoal && <small> / {activeGoal}</small>}
+                  {activeValue}{activeUsesPercentage ? "%" : ""}
+                  {activeGoal && <small> / {activeGoal}{activeUsesPercentage ? "%" : ""}</small>}
                 </strong>
                 {activeGoal && <GoalProgress className="big-goal-progress" value={Number(activeValue)} goal={activeGoal} />}
               </>
             )}
-            <button aria-label={activeMetric === "cans" ? "Tap to add 10%" : isToggle ? activeValue ? "Tap to undo" : "Tap when done" : "Tap to add one"} className="tap-prompt" disabled={showBreakdown} onClick={() => {
+            <button aria-label={(activeMetric === "cans" && activeAction.targetCadence === "daily" && !isToggle) || activeUsesPercentage ? "Tap to add 10%" : isToggle ? activeValue ? "Tap to undo" : "Tap when done" : "Tap to add one"} className="tap-prompt" disabled={showBreakdown} onClick={() => {
               if (ignoreNextTap.current) { ignoreNextTap.current = false; return; }
               setShowBreakdown(false);
               handleBigTap();
             }} type="button">
               <Icon name={isToggle && activeValue ? "check" : "plus"} size={17} />
-              {activeMetric === "cans"
+              {(activeMetric === "cans" && activeAction.targetCadence === "daily" && !isToggle) || activeUsesPercentage
                 ? "Tap to add 10%"
                 : isToggle
                   ? activeMetric === "ears"
@@ -1836,9 +2316,9 @@ export default function App() {
                     : (activeValue ? "Tap to undo" : "Tap when done")
                   : "Tap to add one"}
             </button>
-            {tapBurst > 0 && (
-              <div className={`metric-scene variant-${tapBurst % 3}`} key={tapBurst} aria-hidden="true">
-                {(activeMetric === "treats" || activeMetric === "kibble" || activeMetric === "cans") && (
+            {tapBurst > 0 && tapAnimation !== "none" && (
+              <div className={`metric-scene tap-animation-${tapAnimation} variant-${tapBurst % 3}`} key={tapBurst} aria-hidden="true">
+                {tapAnimation === "chomp" && (
                   <div className="chomp-cat">
                     <span className="chomp-ear left" /><span className="chomp-ear right" />
                     <i className="chomp-eye left" /><i className="chomp-eye right" />
@@ -1846,42 +2326,43 @@ export default function App() {
                     <em className="food-bit" />
                   </div>
                 )}
-                {activeMetric === "played" && (
+                {tapAnimation === "play" && (
                   <div className="play-scene">
                     <i className="string" /><b className="toy" /><span className="swipe-paw"><i /><i /><i /></span>
                   </div>
                 )}
-                {activeMetric === "peed" && (
+                {tapAnimation === "outside" && <div className="outside-scene"><Icon name="catLounging" size={72} /><i /></div>}
+                {tapAnimation === "pee" && (
                   <div className="pee-scene"><Icon name="pee" size={58} /></div>
                 )}
-                {activeMetric === "fountain" && (
+                {tapAnimation === "water" && (
                   <div className="droplet-scene"><i /><i /><i /><i /><i /></div>
                 )}
-                {activeMetric === "pooped" && (
+                {tapAnimation === "poop" && (
                   <div className="poop-scene">
                     <span className="poop"><i /><i /><i /></span>
                     <b className="fly fly-one"><i /></b><b className="fly fly-two"><i /></b>
                   </div>
                 )}
-                {activeMetric === "teethPawing" && (
+                {tapAnimation === "paw" && (
                   <div className="paw-scene"><Icon name="paw" size={54} /><i /><i /></div>
                 )}
-                {activeMetric === "ears" && (
-                  <div className="ear-scene"><Icon name="ear" size={60} /><i /><i /></div>
+                {tapAnimation === "ears" && (
+                  <div className="ear-scene"><Icon name="ear" size={60} /><i className="ear-drop ear-drop-left" /><i className="ear-drop ear-drop-right" /></div>
                 )}
                 <div className="tap-burst">
-                  <b>{activeMetric === "cans" ? "+10%" : isToggle ? "Done!" : "+1"}</b>
+                  <b>{(activeMetric === "cans" && activeAction.targetCadence === "daily") || activeUsesPercentage ? "+10%" : isToggle ? "Done!" : "+1"}</b>
                   <i /><i /><i /><i /><i />
                 </div>
               </div>
             )}
           </div>
           <button aria-hidden={showBreakdown} className="feeding-breakdown-trigger" disabled={showBreakdown} onClick={() => setShowBreakdown(true)} tabIndex={showBreakdown ? -1 : 0} type="button">
-            {breakdownQuestions[activeMetric]} <span aria-label={`${breakdownAmountLabel} tracked`}>{breakdownAmountLabel}</span>
+            {breakdownQuestion} <span aria-label={`${breakdownAmountLabel} tracked`}>{breakdownAmountLabel}</span>
           </button>
           <div className="big-tap-backface" aria-hidden={!showBreakdown} aria-label={`${activeItem.shortLabel} record`}>
             <div className="record-card-heading">
-              <div><small>{contributionPeriod} record</small><strong>{breakdownQuestions[activeMetric]}</strong></div>
+              <div><small>{contributionPeriod} record</small><strong>{breakdownQuestion}</strong></div>
               <span aria-label={`${breakdownAmountLabel} tracked`}>{breakdownAmountLabel}</span>
             </div>
             <h3>{activeItem.shortLabel}</h3>
@@ -1889,13 +2370,13 @@ export default function App() {
               <ol className="record-card-list">
                 {visibleActivityEntries.map((entry) => (
                   <li key={entry.id}>
-                    <div><strong>{entry.who}</strong><small>{entry.detail}</small></div>
+                    <div><strong>{entry.who}</strong><small>{entry.what} · {entry.detail}</small></div>
                     <time dateTime={entry.timestamp}>{contributionTimeFormat.format(new Date(entry.timestamp))}</time>
                   </li>
                 ))}
               </ol>
             ) : (
-              <p className="record-card-empty">No {activeItem.shortLabel.toLowerCase()} activity recorded {activeMetric === "ears" ? "this week" : "today"} yet.</p>
+              <p className="record-card-empty">No {activeItem.shortLabel.toLowerCase()} activity recorded {activeAction.targetCadence === "weekly" ? "this week" : activeAction.targetCadence === "monthly" ? "this month" : "today"} yet.</p>
             )}
             <button className="record-card-back" disabled={!showBreakdown} onClick={() => setShowBreakdown(false)} type="button">‹ Back to tracking</button>
           </div>
@@ -1904,42 +2385,152 @@ export default function App() {
           <p className="mobile-helper">
             {activeGoal
               ? isComplete
-                ? `Nice! ${selectedCat.name} reached today’s goal.`
-                : `${Math.max(0, activeGoal - Number(activeValue))} more to reach today’s goal`
-              : activeMetric === "ears"
+                ? `Nice! ${selectedCat.name} reached the ${activeAction.targetCadence} target.`
+                : `${Math.max(0, activeGoal - Number(activeValue))} more to reach the ${activeAction.targetCadence} target`
+              : activeAction.targetCadence === "weekly"
                 ? "This check-in resets each week"
+                : activeAction.targetCadence === "monthly"
+                  ? "This check-in resets each month"
                 : "Tap the big card whenever it happens"}
           </p>
           {careWarning && <p className="care-limit-warning" role="status">{careWarning}</p>}
-          {(showTrackPicker || trackPickerExit.closing) && <div className={`track-picker-backdrop${trackPickerExit.closing ? " is-closing" : ""}`} onMouseDown={(event) => { if (event.target === event.currentTarget) trackPickerExit.dismiss(); }}>
+          {(showTrackPicker || trackPickerExit.closing) && createPortal(<div className={`track-picker-backdrop${trackPickerExit.closing ? " is-closing" : ""}`} onMouseDown={(event) => { if (event.target === event.currentTarget) requestCareMenuExit(); }}>
             <section aria-labelledby="track-picker-title" aria-modal="true" className={`track-picker-dialog${trackPickerExit.closing ? " is-closing" : ""}`} role="dialog">
-              <header><div><span>Care tracker</span><h2 id="track-picker-title">What would you like to track?</h2></div><button aria-label="Close tracking options" onClick={() => trackPickerExit.dismiss()} type="button">×</button></header>
+              <header><div className="track-picker-heading"><h2 id="track-picker-title">Care tracker</h2><p aria-label={editingCareActions ? "Drag to rearrange or tap an action to edit" : "Tap to track, hold an action to edit, use the reorder icon to sort"}>{editingCareActions ? "Drag to rearrange · tap to edit" : <>Tap to track · hold to edit · <span aria-hidden="true"><Icon name="reorder" size={11} /></span> to sort</>}</p></div><div className="track-picker-header-actions"><button className={editingCareActions ? "is-editing" : ""} disabled={careActionOrderSaving} onClick={() => {
+                if (editingCareActions) void finishCareActionEditing();
+                else { setCareActionOrderBaseline(careActions.map((action) => ({ ...action }))); setCareActionDeletionBaseline([...careActionDeletions]); setEditingCareActions(true); }
+              }} aria-label={editingCareActions ? "Done rearranging care actions" : "Reorder care actions"} title={editingCareActions ? "Done" : "Reorder care actions"} type="button">{careActionOrderSaving ? "Saving…" : editingCareActions ? "Done" : <Icon name="reorder" size={17} />}</button><button aria-label="Close tracking options" disabled={careActionOrderSaving} onClick={() => requestCareMenuExit()} type="button">×</button></div></header>
               <div className="mobile-item-grid">
                 {mobileMetrics.map((item) => {
-                  const value = tracker[item.key];
-                  const done = typeof value === "boolean" ? value : value > 0;
-                  return <button
-                    aria-pressed={activeMetric === item.key}
-                    className={`${item.color} ${activeMetric === item.key ? "active" : ""}`}
-                    key={item.key}
+                  const value = tracker[item.key] ?? (careActionFor(careActions, item.key)?.behavior === "toggle" ? false : 0);
+                  const goal = item.targetCadence !== "none" ? Number(tracker[item.key + "Goal"] ?? (item.goal ? tracker[item.goal] : undefined) ?? item.targetAmount ?? 0) : 0;
+                  const done = typeof value === "boolean" ? value : Number(value) > 0;
+                  const itemAction = careActionFor(careActions, item.key);
+                  const itemIsPercentage = itemAction?.behavior === "percentage";
+                  return <div className={`care-action-tile-wrap${editingCareActions ? " is-editing" : ""}${draggedActionKey === item.key ? " is-dragging" : ""}`} data-action-key={item.key} key={item.key}
                     onClick={() => {
+                      if (longPressActionKey.current?.key === item.key) {
+                        const shouldSuppress = Date.now() < longPressActionKey.current.expiresAt;
+                        longPressActionKey.current = null;
+                        if (shouldSuppress) return;
+                      }
+                      if (editingCareActions) {
+                        if (suppressActionClick.current) { suppressActionClick.current = false; return; }
+                        openActionEditor(item.key);
+                        return;
+                      }
                       setActiveMetric(item.key);
                       setTapBurst(0);
                       setShowBreakdown(false);
-                      trackPickerExit.dismiss();
+                      requestCareMenuExit();
                     }}
-                    type="button"
-                  >
-                    <span><Icon name={item.icon} size={21} /></span>
-                    <strong>{item.shortLabel}</strong>
-                    {item.goal && <><small className="tile-goal-count">{Number(value)} / {Number(tracker[item.goal])}</small><GoalProgress className="tile-goal-progress" value={Number(value)} goal={Number(tracker[item.goal])} /></>}
-                    {done && <i><Icon name="check" size={10} /></i>}
-                  </button>;
+                    onPointerDown={(event) => {
+                      if (!editingCareActions) {
+                        const pointerId = event.pointerId;
+                        const startX = event.clientX;
+                        const startY = event.clientY;
+                        const timer = window.setTimeout(() => {
+                          if (careActionHold.current?.pointerId !== pointerId) return;
+                          careActionHold.current = null;
+                          longPressActionKey.current = { key: item.key, expiresAt: Date.now() + 1200 };
+                          openActionEditor(item.key);
+                        }, 520);
+                        careActionHold.current = { pointerId, startX, startY, timer };
+                        return;
+                      }
+                      const bounds = event.currentTarget.getBoundingClientRect();
+                      careActionDrag.current = { key: item.key, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, offsetX: event.clientX - bounds.left, offsetY: event.clientY - bounds.top, moved: false, lastTargetKey: null };
+                      const preview = event.currentTarget.querySelector<HTMLButtonElement>(":scope > .care-action-tile-content > button:not(.care-action-remove)")?.cloneNode(true) as HTMLButtonElement | undefined;
+                      if (preview) {
+                        preview.classList.add("care-action-drag-preview");
+                        preview.setAttribute("aria-hidden", "true");
+                        preview.removeAttribute("aria-label");
+                        preview.style.width = `${bounds.width}px`;
+                        preview.style.height = `${bounds.height - 9}px`;
+                        preview.style.left = `${bounds.left}px`;
+                        preview.style.top = `${bounds.top}px`;
+                        document.body.append(preview);
+                        careActionDragPreview.current = preview;
+                      }
+                      try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* Pointer capture is unavailable in some browsers. */ }
+                      setDraggedActionKey(item.key);
+                    }}
+                    onPointerMove={(event) => {
+                      const hold = careActionHold.current;
+                      if (hold?.pointerId === event.pointerId && Math.hypot(event.clientX - hold.startX, event.clientY - hold.startY) > 8) {
+                        window.clearTimeout(hold.timer);
+                        careActionHold.current = null;
+                      }
+                      const drag = careActionDrag.current;
+                      if (!drag || drag.pointerId !== event.pointerId) return;
+                      if (!drag.moved && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > 6) drag.moved = true;
+                      if (!drag.moved) return;
+                      if (careActionDragPreview.current) {
+                        careActionDragPreview.current.style.left = `${event.clientX - drag.offsetX}px`;
+                        careActionDragPreview.current.style.top = `${event.clientY - drag.offsetY}px`;
+                      }
+                      const target = document.elementsFromPoint(event.clientX, event.clientY).map((element) => element.closest<HTMLElement>(".care-action-tile-wrap[data-action-key]")).find((candidate) => candidate && candidate.dataset.actionKey !== drag.key);
+                      const targetKey = target?.dataset.actionKey;
+                      if (!targetKey || targetKey === drag.key) drag.lastTargetKey = null;
+                      else if (targetKey !== drag.lastTargetKey) {
+                        drag.lastTargetKey = targetKey;
+                        const reorderedActions = moveCareAction(careActions, drag.key, targetKey);
+                        if (reorderedActions !== careActions) {
+                          careActionLayoutBefore.current = new Map(Array.from(document.querySelectorAll<HTMLElement>(".care-action-tile-wrap[data-action-key]")).flatMap((element) => {
+                            const key = element.dataset.actionKey;
+                            return key ? [[key, element.getBoundingClientRect()] as const] : [];
+                          }));
+                          setCareActions(reorderedActions);
+                        }
+                      }
+                    }}
+                    onPointerUp={(event) => {
+                      if (careActionHold.current?.pointerId === event.pointerId) {
+                        window.clearTimeout(careActionHold.current.timer);
+                        careActionHold.current = null;
+                      }
+                      const drag = careActionDrag.current;
+                      if (!drag || drag.pointerId !== event.pointerId) return;
+                      careActionDragPreview.current?.remove();
+                      careActionDragPreview.current = null;
+                      careActionDrag.current = null;
+                      setDraggedActionKey(null);
+                      if (drag.moved) suppressActionClick.current = true;
+                    }}
+                    onPointerCancel={(event) => {
+                      if (careActionHold.current?.pointerId === event.pointerId) {
+                        window.clearTimeout(careActionHold.current.timer);
+                        careActionHold.current = null;
+                      }
+                      if (careActionDrag.current?.pointerId !== event.pointerId) return;
+                      const moved = careActionDrag.current.moved;
+                      careActionDragPreview.current?.remove();
+                      careActionDragPreview.current = null;
+                      careActionDrag.current = null;
+                      setDraggedActionKey(null);
+                      if (moved) suppressActionClick.current = true;
+                    }}
+                    onPointerLeave={() => {
+                      if (!careActionHold.current) return;
+                      window.clearTimeout(careActionHold.current.timer);
+                      careActionHold.current = null;
+                    }}
+                    onContextMenu={(event) => { if (!editingCareActions) event.preventDefault(); }}>
+                    <div className={`care-action-tile-content${editingCareActions ? " is-editing" : ""}`}>
+                    <button aria-label={editingCareActions ? `Drag ${item.shortLabel} to reorder, or tap to edit` : undefined} aria-pressed={!editingCareActions && activeMetric === item.key} className={`${item.color} ${activeMetric === item.key ? "active" : ""}`} type="button">
+                      <span><Icon name={item.icon} size={21} /></span>
+                      <strong>{item.shortLabel}</strong>
+                      {goal > 0 && <><small className="tile-goal-count">{Number(value)}{itemIsPercentage ? "%" : ""} / {goal}{itemIsPercentage ? "%" : ""}</small><GoalProgress className="tile-goal-progress" value={Number(value)} goal={goal} /></>}
+                      {done && !editingCareActions && <i><Icon name="check" size={10} /></i>}
+                    </button>
+                    {editingCareActions && <button aria-label={`Remove ${item.shortLabel} care action`} className="care-action-remove" disabled={careActions.length <= 1} onClick={(event) => { event.stopPropagation(); const action = careActionFor(careActions, item.key); if (action) setPendingCareActionRemoval(action); }} onPointerDown={(event) => event.stopPropagation()} title={careActions.length <= 1 ? "Keep at least one care action" : `Remove ${item.shortLabel}`} type="button"><Icon name="minus" size={15} /></button>}
+                    </div>
+                  </div>;
                 })}
+                {!editingCareActions && <button className="care-action-add-tile" onClick={() => openActionEditor()} type="button"><span><Icon name="plus" size={22} /></span><strong>Add care action</strong></button>}
               </div>
-              <p className="track-picker-hint">You can also swipe left or right on the care card.</p>
             </section>
-          </div>}
+          </div>, document.body)}
 
           <CareLogPanel cat={selectedCat} logs={careLogs} memberName={memberName} onMemberNameChange={setMemberName} timezone={cloudFamily?.timezone} cloudMode={Boolean(cloudFamily)} expanded={careLogExpanded} onToggle={() => setCareLogExpanded((open) => !open)} />
         </section>
@@ -1959,9 +2550,9 @@ export default function App() {
           <div className="daily-progress">
             <div>
               <span>Daily care</span>
-              <strong>{completed} of 7</strong>
+              <strong>{completed} of {careActionCount}</strong>
             </div>
-            <div className="progress-track"><span style={{ width: `${(completed / 7) * 100}%` }} /></div>
+            <div className="progress-track"><span style={{ width: `${(completed / Math.max(1, careActionCount)) * 100}%` }} /></div>
           </div>
         </section>
         {cloudError && <p className="cloud-feedback desktop-cloud-feedback" role="status">{cloudError}</p>}
@@ -1972,9 +2563,9 @@ export default function App() {
             <div className="card-heading">
               <span className="heading-icon peach"><Icon name="bowl" /></span>
               <div><h2>Food & water</h2><p>Today’s meals and sips</p></div>
-              <button className="quota-button" onClick={openGoalEditor}>
+              <button className="quota-button" onClick={openCareActionManager}>
                 <Icon name="settings" size={15} />
-                Quotas
+                Care actions
               </button>
             </div>
             <div className="tracker-list">
@@ -2052,7 +2643,7 @@ export default function App() {
       </div>
 
       {(showAddCat || addCatExit.closing) && (
-        <div className={`modal-backdrop${addCatExit.closing ? " is-closing" : ""}`} onMouseDown={(event) => { if (event.target === event.currentTarget && !addCatBusy) addCatExit.dismiss(); }}>
+        <div className={`modal-backdrop${addCatExit.closing ? " is-closing" : ""}`} onMouseDown={(event) => { if (event.target === event.currentTarget && !addCatBusy) requestCloseAddCat(); }}>
           <form aria-labelledby="add-cat-title" aria-modal="true" className={`modal${addCatExit.closing ? " is-closing" : ""}`} onSubmit={addCat} onMouseDown={(event) => event.stopPropagation()} role="dialog">
             <span className="modal-icon"><Icon name="paw" size={24} /></span>
             <h2 id="add-cat-title">Add a new cat</h2>
@@ -2098,7 +2689,7 @@ export default function App() {
             )}
             {photoError && <small className="photo-error">{photoError}</small>}
             <div className="modal-actions">
-              <button disabled={addCatBusy || addCatExit.closing} type="button" onClick={() => addCatExit.dismiss(() => { setNewCatPhoto(undefined); setNewCatPhotoPosition({ x: 50, y: 50 }); setNewCatPhotoZoom(1); setPhotoError(""); })}>Cancel</button>
+              <button disabled={addCatBusy || addCatExit.closing} type="button" onClick={requestCloseAddCat}>Cancel</button>
               <button type="submit" disabled={addCatBusy || !newCatName.trim()}>{addCatBusy ? <><span className="button-spinner" /> Adding…</> : <><Icon name="plus" size={17} /> Add cat</>}</button>
             </div>
           </form>
@@ -2108,11 +2699,11 @@ export default function App() {
       {(profileEditCatId !== null || profileExit.closing) && (() => {
         const cat = cats.find((entry) => String(entry.id) === String(profileEditCatId));
         if (!cat) return null;
-        return <div className={`modal-backdrop${profileExit.closing ? " is-closing" : ""}`} onMouseDown={(event) => { if (event.target === event.currentTarget && !profileSaving && !profilePhotoLoading) profileExit.dismiss(); }}>
+        return <div className={`modal-backdrop${profileExit.closing ? " is-closing" : ""}`} onMouseDown={(event) => { if (event.target === event.currentTarget && !profileSaving && !profilePhotoLoading) requestCloseCatProfile(); }}>
           <form aria-labelledby="edit-cat-profile-title" aria-modal="true" className={`modal cat-profile-modal${profileExit.closing ? " is-closing" : ""}`} onMouseDown={(event) => event.stopPropagation()} onSubmit={(event) => void saveCatProfile(event)} role="dialog">
             <span className="modal-icon"><Icon name="paw" size={24} /></span>
             <h2 id="edit-cat-profile-title">Edit {cat.name}</h2>
-            <p>Update {cat.name}’s profile and daily food goals.</p>
+            <p>Update {cat.name}’s profile and care actions.</p>
             <label>Cat’s name<input maxLength={60} onChange={(event) => setProfileNameDraft(event.target.value)} required value={profileNameDraft} /></label>
             <section className="profile-photo-field" aria-label="Cat profile photo">
               <strong>Photo</strong>
@@ -2129,104 +2720,71 @@ export default function App() {
               }} type="file" /></label>
               {profilePhotoDraft && <button className="profile-photo-remove" disabled={profileSaving || profilePhotoLoading} onClick={() => setProfilePhotoDraft(undefined)} type="button">Remove photo</button>}
             </section>
-            <div className="profile-goals"><strong>Daily food goals</strong><div className="quota-fields">
-              <label><span><Icon name="treat" size={18} /> Dental treats <small>pieces</small></span><input aria-label="Dental treats goal" inputMode="numeric" min="1" onChange={(event) => setProfileGoalDrafts((current) => ({ ...current, treatsGoal: event.target.value }))} type="number" value={profileGoalDrafts.treatsGoal} /></label>
-              <label><span><Icon name="bowl" size={18} /> Kibble <small>spoons</small></span><input aria-label="Kibble goal" inputMode="numeric" min="1" onChange={(event) => setProfileGoalDrafts((current) => ({ ...current, kibbleGoal: event.target.value }))} type="number" value={profileGoalDrafts.kibbleGoal} /></label>
-              <label><span><Icon name="medical" size={18} /> Wet food <small>cans</small></span><input aria-label="Wet food goal" inputMode="numeric" min="1" onChange={(event) => setProfileGoalDrafts((current) => ({ ...current, cansGoal: event.target.value }))} type="number" value={profileGoalDrafts.cansGoal} /></label>
-            </div></div>
+            <section className="profile-care-actions">
+              <div><strong>Care tracker</strong><small>Add, edit, remove, or reorder the actions your family tracks.</small></div>
+              <button className="edit-profile-trigger" onClick={() => setShowTrackPicker(true)} type="button"><Icon name="paw" size={15} /> Manage care actions</button>
+            </section>
             {photoError && <small className="photo-error">{photoError}</small>}
-            <div className="modal-actions"><button disabled={profileSaving || profilePhotoLoading || profileExit.closing} onClick={() => profileExit.dismiss()} type="button">Cancel</button><button disabled={profileSaving || profilePhotoLoading || profileExit.closing || !profileNameDraft.trim()} type="submit">{profileSaving ? <><span className="button-spinner" /> Saving…</> : "Save profile"}</button></div>
+            <div className="modal-actions"><button aria-label={`Remove ${cat.name}`} className="cat-profile-remove" disabled={profileSaving || profilePhotoLoading || profileExit.closing} onClick={() => void removeCat(cat)} type="button">Remove cat</button><button disabled={profileSaving || profilePhotoLoading || profileExit.closing} onClick={requestCloseCatProfile} type="button">Cancel</button><button disabled={profileSaving || profilePhotoLoading || profileExit.closing || !profileNameDraft.trim()} type="submit">{profileSaving ? <><span className="button-spinner" /> Saving…</> : "Save profile"}</button></div>
           </form>
         </div>;
       })()}
 
-      {(showQuotas || quotasExit.closing) && (
-        <div className={`modal-backdrop${quotasExit.closing ? " is-closing" : ""}`} onMouseDown={() => quotasExit.dismiss()}>
-          <div className={`modal quota-modal${quotasExit.closing ? " is-closing" : ""}`} onMouseDown={(event) => event.stopPropagation()}>
-            <span className="modal-icon quota-icon"><Icon name="settings" size={24} /></span>
-            <h2>Daily food quotas</h2>
-            <p>Set {selectedCat.name}’s target amounts for each day.</p>
-            <div className="quota-fields">
-              <label>
-                <span><Icon name="treat" size={18} /> Dental treats <small>pieces</small></span>
-                <input
-                  inputMode="numeric"
-                  min="1"
-                  onChange={(event) => setGoalDrafts((drafts) => ({ ...drafts, treatsGoal: event.target.value }))}
-                  type="number"
-                  value={goalDrafts.treatsGoal}
-                />
-              </label>
-              <label>
-                <span><Icon name="bowl" size={18} /> Kibble <small>spoons</small></span>
-                <input
-                  inputMode="numeric"
-                  min="1"
-                  onChange={(event) => setGoalDrafts((drafts) => ({ ...drafts, kibbleGoal: event.target.value }))}
-                  type="number"
-                  value={goalDrafts.kibbleGoal}
-                />
-              </label>
-              <label>
-                <span><Icon name="medical" size={18} /> Wet food <small>cans</small></span>
-                <input
-                  inputMode="numeric"
-                  min="1"
-                  onChange={(event) => setGoalDrafts((drafts) => ({ ...drafts, cansGoal: event.target.value }))}
-                  type="number"
-                  value={goalDrafts.cansGoal}
-                />
-              </label>
-            </div>
-            <div className="modal-actions">
-              <button type="button" onClick={saveGoalDrafts}>Done</button>
-            </div>
+      {(editingActionKey !== null || actionEditorExit.closing) && createPortal(<div className={`modal-backdrop action-editor-backdrop${actionEditorExit.closing ? " is-closing" : ""}`} onMouseDown={(event) => { if (event.target === event.currentTarget && !actionSaving) requestCloseActionEditor(); }}>
+        <form aria-labelledby="action-editor-title" aria-modal="true" className={`modal care-action-editor${actionEditorExit.closing ? " is-closing" : ""}`} onSubmit={saveActionDraft} role="dialog">
+          <h2 id="action-editor-title">{careActionFor(careActions, actionDraft.key) ? "Edit care action" : "Add a care action"}</h2>
+          <div aria-label="Care box preview" className="action-preview action-preview-top">
+            <span className="action-preview-label">Tap the icon to edit</span>
+            <CareActionPreview action={actionDraft} onEditAppearance={() => setShowActionAppearance(true)} />
           </div>
-        </div>
-      )}
+          <label>Action name<input autoComplete="off" maxLength={40} onChange={(event) => setActionDraft((draft) => ({ ...draft, name: event.target.value, shortName: event.target.value }))} required value={actionDraft.name} /></label>
+          {actionDraft.behavior === "numeric" && <label>Unit<input autoComplete="off" maxLength={20} onChange={(event) => setActionDraft((draft) => ({ ...draft, unit: event.target.value }))} placeholder="times, spoons, sessions…" required value={actionDraft.unit} /></label>}
+          <ChoicePicker label="Quantifier" options={behaviorOptions} onChange={(value) => {
+            const behavior = value as CareActionConfig["behavior"];
+            setActionDraft((draft) => ({
+              ...draft,
+              behavior,
+              unit: behavior === "percentage" ? draft.key === "cans" ? "cans" : "%" : behavior === "numeric" && draft.unit === "%" ? "times" : draft.unit,
+              targetAmount: draft.targetCadence === "none" ? null : behavior === "toggle" ? 1 : behavior === "percentage" ? 100 : draft.behavior === "percentage" ? 1 : draft.targetAmount ?? 1,
+            }));
+          }} value={actionDraft.behavior} />
+          <ChoicePicker label="Target" options={targetOptions} onChange={(cadence) => setActionDraft((draft) => ({ ...draft, targetCadence: cadence as CareActionConfig["targetCadence"], targetAmount: cadence === "none" ? null : draft.behavior === "toggle" ? 1 : draft.behavior === "percentage" ? 100 : draft.targetAmount ?? 1 }))} value={actionDraft.targetCadence} />
+          {actionDraft.behavior === "numeric" && actionDraft.targetCadence !== "none" && <label>{actionDraft.targetCadence[0].toUpperCase() + actionDraft.targetCadence.slice(1)} target<input inputMode="numeric" min="1" onChange={(event) => setActionDraft((draft) => ({ ...draft, targetAmount: Number(event.target.value) }))} required type="number" value={actionDraft.targetAmount ?? ""} /></label>}
+          <div className="modal-actions">
+            {careActionFor(careActions, actionDraft.key) && <button className="danger" disabled={actionSaving || careActions.length <= 1} onClick={(event) => { event.preventDefault(); const action = careActionFor(careActions, actionDraft.key); if (action) setPendingCareActionRemoval(action); }} title={careActions.length <= 1 ? "Keep at least one care action" : "Delete this care action"} type="button">Delete action</button>}
+            <button disabled={actionSaving || actionEditorExit.closing} onClick={requestCloseActionEditor} type="button">Cancel</button>
+            <button disabled={actionSaving || actionEditorExit.closing || !actionDraft.name.trim()} type="submit">{actionSaving ? <><span className="button-spinner" /> Saving…</> : "Save action"}</button>
+          </div>
+        </form>
+        {showActionAppearance && <div className="modal-backdrop action-appearance-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowActionAppearance(false); }}>
+          <section aria-labelledby="action-appearance-title" aria-modal="true" className="modal action-appearance-dialog" role="dialog">
+            <h2 id="action-appearance-title">Icon &amp; colour</h2>
+            <p>Choose how this care action looks.</p>
+            <ChoicePicker label="Icon & animation" options={actionIconOptions} onChange={(icon) => {
+              const appearance = actionIconOptions.find((option) => option.value === icon);
+              if (appearance) setActionDraft((draft) => ({ ...draft, icon: appearance.value, animation: appearance.animation }));
+            }} value={actionDraft.icon} />
+            <fieldset className="action-color-field"><legend>Colour</legend><div className="action-color-options">{actionColors.map((color) => <button aria-label={color.label} aria-pressed={actionDraft.color === color.value} className={`action-color-swatch ${color.value}${actionDraft.color === color.value ? " is-selected" : ""}`} key={color.value} onClick={() => setActionDraft((draft) => ({ ...draft, color: color.value }))} title={color.label} type="button"><Icon name={actionDraft.icon as IconName} size={17} /></button>)}</div></fieldset>
+            <div className="modal-actions"><button onClick={() => setShowActionAppearance(false)} type="button">Done</button></div>
+          </section>
+        </div>}
+      </div>, document.body)}
       <nav aria-label="Primary navigation" className={`primary-nav page-${activeTab}`}>
         <button aria-current={activeTab === "care" ? "page" : undefined} className={activeTab === "care" ? "active" : ""} disabled={cats.length === 0} onClick={returnToCare} type="button">
           <Icon name="paw" size={19} />
           <span>Care</span>
         </button>
         <button aria-current={activeTab === "cats" ? "page" : undefined} className={activeTab === "cats" ? "active" : ""} onClick={() => navigateTo("cats")} type="button">
-          <Icon name="heart" size={19} />
+          <Icon name="cat" size={21} />
           <span>Cats</span>
-        </button>
-        <button aria-current={activeTab === "analytics" ? "page" : undefined} className={activeTab === "analytics" ? "active" : ""} onClick={() => { setAnalyticsInitialRange("week"); navigateTo("analytics"); }} type="button">
-          <Icon name="chart" size={20} />
-          <span>Analytics</span>
         </button>
         <button aria-current={activeTab === "family" ? "page" : undefined} className={activeTab === "family" ? "active" : ""} onClick={() => navigateTo("family")} type="button">
           <Icon name="family" size={19} />
           <span>Family</span>
         </button>
       </nav>
-      {activeTab === "cats" && <CatsOverview
-        cats={cats}
-        foodProgress={Object.fromEntries(cats.map((cat) => {
-          const current = { ...emptyTracker, ...(trackers[String(cat.id)] ?? {}) };
-          return [String(cat.id), {
-            treats: current.treats,
-            treatsGoal: current.treatsGoal,
-            kibble: current.kibble,
-            kibbleGoal: current.kibbleGoal,
-            wetFood: current.cans + current.canProgress / 100,
-            wetFoodGoal: current.cansGoal,
-          }];
-        }))}
-        error={cloudError || photoError}
-        familyName={cloudFamily?.name}
-        onManageFamily={() => navigateTo("family")}
-        onAdd={() => setShowAddCat(true)}
-        onAnalytics={(id) => { setSelectedId(id); setAnalyticsInitialRange("day"); navigateTo("analytics"); }}
-        onEdit={openCatProfile}
-        onRemove={removeCat}
-        onSelect={(id) => { setSelectedId(id); navigateTo("care"); }}
-        selectedId={selectedId}
-      />}
-      {activeTab === "analytics" && <AnalyticsPage cats={cats} logs={careLogs} goals={Object.fromEntries(cats.map((cat) => { const current = { ...emptyTracker, ...(trackers[String(cat.id)] ?? {}) }; return [String(cat.id), { treatsGoal: current.treatsGoal, kibbleGoal: current.kibbleGoal, cansGoal: current.cansGoal }]; }))} targets={cloudTargets} members={cloudMembers} selectedCatId={selectedId} timezone={cloudFamily?.timezone} initialRange={analyticsInitialRange} />}
-      {activeTab === "family" && <FamilyPortal cats={cats} initialFamily={cloudFamily ?? undefined} initialMembers={cloudFamily ? cloudMembers : undefined} initialSession={cloudSession} workspaceReady={!cloudWorkspaceLoading} onClose={() => { navigateTo(cloudFamily ? "care" : "cats"); setCloudRefreshTick((tick) => tick + 1); }} onManageCats={() => navigateTo("cats")} onSelectCat={(id) => { setSelectedId(id); navigateTo("care"); }} />}
+      {activeTab === "cats" && <AnalyticsPage cats={cats} logs={careLogs} goals={analyticsGoals} targets={cloudTargets} members={cloudMembers} careActions={careActions} selectedCatId={selectedId} timezone={cloudFamily?.timezone} familyName={cloudFamily?.name} onAddCat={() => setShowAddCat(true)} onEditCat={openCatProfile} onManageFamily={() => navigateTo("family")} />}
+      {activeTab === "family" && <FamilyPortal cats={cats} initialFamily={cloudFamily ?? undefined} initialMembers={cloudFamily ? cloudMembers : undefined} initialSession={cloudSession} workspaceReady={!cloudWorkspaceLoading} onRegisterExitGuard={(guard) => { familyExitGuard.current = guard; }} onClose={() => { navigateToRaw(cloudFamily ? "care" : "cats"); setCloudRefreshTick((tick) => tick + 1); }} onManageCats={() => navigateToRaw("cats")} onSelectCat={(id) => { setSelectedId(id); navigateToRaw("care"); }} />}
       {pendingCatRemoval && <ConfirmDialog
         title={`Remove ${pendingCatRemoval.name}?`}
         description={`${pendingCatRemoval.name} will be removed from your family tracker. Their existing care history will be kept.`}
@@ -2234,6 +2792,28 @@ export default function App() {
         busy={catRemovalBusy}
         onCancel={() => setPendingCatRemoval(null)}
         onConfirm={() => void confirmRemoveCat()}
+      />}
+      {pendingCareActionRemoval && <ConfirmDialog
+        title={`Delete ${pendingCareActionRemoval.name}?`}
+        description="This removes the action from the family care menu for everyone. Existing care logs and notifications keep the action details recorded at the time."
+        confirmLabel="Delete action"
+        busy={actionSaving}
+        onCancel={() => setPendingCareActionRemoval(null)}
+        onConfirm={() => void removeCareAction(pendingCareActionRemoval)}
+      />}
+      {showDiscardCareActionOrder && <ConfirmDialog
+        title="Discard care menu changes?"
+        description="Your new care item order has not been saved. Leaving now will undo these changes. Choose Done to keep the new order."
+        confirmLabel="Discard changes"
+        onCancel={() => { setShowDiscardCareActionOrder(false); pendingCareMenuExit.current = null; }}
+        onConfirm={discardCareActionOrder}
+      />}
+      {discardDraft && <ConfirmDialog
+        title="Discard unsaved changes?"
+        description={discardDraft.description}
+        confirmLabel="Discard changes"
+        onCancel={() => setDiscardDraft(null)}
+        onConfirm={() => { const discard = discardDraft.discard; setDiscardDraft(null); discard(); }}
       />}
     </div>
   );

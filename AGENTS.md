@@ -83,6 +83,7 @@ Migration status reported by the project owner:
 | `20261017100000_google_profile_photos.sql` | Added locally; apply to Supabase before relying on Google profile photos for other family members |
 | `20261018100000_family_member_names.sql` | Added locally; apply to Supabase to enable shared member-name editing and Google-name defaults |
 | `20261019100000_family_deletion.sql` | Added locally; apply to Supabase to enable family deletion |
+| `20261024100000_custom_care_actions.sql` | Added locally; apply to Supabase to enable shared/custom care actions and snapshot action names/icons/units on care events |
 
 When adding a migration, use a new timestamped SQL file and never edit a migration that has already been applied. Test access policies against separate families/accounts where possible. The app's browser-facing Supabase URL and publishable key are safe to expose; RLS must enforce access. Keep OAuth provider secrets in Supabase settings.
 

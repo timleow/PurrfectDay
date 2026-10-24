@@ -68,7 +68,7 @@ describe("tracking and family navigation", () => {
 
     await user.click(catsTab);
     expect(catsTab.getAttribute("aria-current")).toBe("page");
-    expect(await screen.findByRole("heading", { name: "Your cats" })).not.toBeNull();
+    expect(await screen.findByRole("heading", { name: "Cats" })).not.toBeNull();
 
     await user.click(familyTab);
     expect(familyTab.getAttribute("aria-current")).toBe("page");
@@ -86,8 +86,8 @@ describe("tracking and family navigation", () => {
     expect(screen.queryByText("Quick update")).toBeNull();
     expect(screen.queryByText("Change what you’re tracking")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Care Menu" }));
-    const dialog = screen.getByRole("dialog", { name: "What would you like to track?" });
-    expect(within(dialog).getAllByRole("button")).toHaveLength(10);
+    const dialog = screen.getByRole("dialog", { name: "Care tracker" });
+    expect(within(dialog).getAllByRole("button")).toHaveLength(12);
     await user.click(within(dialog).getByRole("button", { name: /Play/ }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(screen.getByRole("button", { name: "Tap to add one" })).not.toBeNull();
@@ -99,7 +99,8 @@ describe("tracking and family navigation", () => {
     const user = userEvent.setup();
     const { container } = renderApp();
     await user.click(screen.getByRole("button", { name: "Care Menu" }));
-    const tiles = Array.from(container.querySelectorAll(".mobile-item-grid button"));
+    const menu = screen.getByRole("dialog", { name: "Care tracker" });
+    const tiles = Array.from(menu.querySelectorAll(".care-action-tile-wrap"));
     expect(tiles.slice(-2).map((tile) => tile.textContent?.trim())).toEqual(["Poop", "Pee"]);
 
     await user.click(screen.getByRole("button", { name: "Poop" }));
@@ -155,14 +156,13 @@ describe("tracking and family navigation", () => {
   });
 
   it("keeps the Cats view available after removing the last cat", async () => {
-    vi.stubGlobal("confirm", vi.fn(() => true));
+    localStorage.setItem("purrfect-cats", JSON.stringify([{ id: 1, name: "Mochi", color: "#F2A07B", initial: "M" }]));
     const user = userEvent.setup();
     renderApp();
     await user.click(screen.getByRole("button", { name: "Cats" }));
-    await user.click(screen.getAllByRole("button", { name: "Remove cat" })[0]);
-    await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Remove cat" }));
-    await user.click(screen.getByRole("button", { name: "Remove cat" }));
-    await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Remove cat" }));
+    await user.click(screen.getByRole("button", { name: "Edit or remove Mochi" }));
+    await user.click(screen.getByRole("button", { name: "Remove Mochi" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Remove cat" }));
     expect(await screen.findByRole("heading", { name: "Your cats start with family" })).not.toBeNull();
     expect(screen.getByRole("navigation", { name: "Primary navigation" })).not.toBeNull();
   });
@@ -220,7 +220,7 @@ describe("tracking and family navigation", () => {
     const user = userEvent.setup();
     renderApp();
     await user.click(screen.getByRole("button", { name: "Cats" }));
-    await user.click(screen.getAllByRole("button", { name: "Edit cat" })[0]);
+    await user.click(screen.getByRole("button", { name: "Edit or remove Mochi" }));
     expect(screen.getByRole("dialog", { name: "Edit Mochi" })).not.toBeNull();
     await user.click(screen.getByRole("button", { name: "Care" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit Mochi" })).toBeNull());
@@ -230,7 +230,7 @@ describe("tracking and family navigation", () => {
     const user = userEvent.setup();
     renderApp();
     await user.click(screen.getByRole("button", { name: "Cats" }));
-    await user.click(screen.getAllByRole("button", { name: "Edit cat" })[0]);
+    await user.click(screen.getByRole("button", { name: "Edit or remove Mochi" }));
     const photoInput = screen.getByLabelText("Choose profile photo");
     await user.upload(photoInput, new File(["photo"], "mochi.png", { type: "image/png" }));
 
@@ -247,14 +247,20 @@ describe("tracking and family navigation", () => {
     const user = userEvent.setup();
     renderApp();
     await user.click(screen.getByRole("button", { name: "Cats" }));
-    await user.click(screen.getAllByRole("button", { name: "Edit cat" })[0]);
+    await user.click(screen.getByRole("button", { name: "Edit or remove Mochi" }));
     await user.clear(screen.getByRole("textbox", { name: "Cat’s name" }));
     await user.type(screen.getByRole("textbox", { name: "Cat’s name" }), "Miso");
-    await user.clear(screen.getByRole("spinbutton", { name: "Dental treats goal" }));
-    await user.type(screen.getByRole("spinbutton", { name: "Dental treats goal" }), "6");
     await user.click(screen.getByRole("button", { name: "Save profile" }));
 
     expect((await screen.findAllByRole("heading", { name: "Miso" })).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: "Care Menu" }));
+    const careMenu = screen.getByRole("dialog", { name: "Care tracker" });
+    await user.click(within(careMenu).getByRole("button", { name: "Reorder care actions" }));
+    await user.click(within(careMenu).getByRole("button", { name: "Drag Treats to reorder, or tap to edit" }));
+    const editDialog = screen.getByRole("heading", { name: "Edit care action" }).closest("form")!;
+    await user.clear(within(editDialog).getByRole("spinbutton"));
+    await user.type(within(editDialog).getByRole("spinbutton"), "6");
+    await user.click(within(editDialog).getByRole("button", { name: "Save action" }));
     expect(JSON.parse(localStorage.getItem("purrfect-trackers") ?? "{}")["1"].treatsGoal).toBe(6);
   });
 
@@ -332,11 +338,11 @@ describe("care tracking corrections", () => {
     renderApp();
     const navigation = screen.getByRole("navigation", { name: "Primary navigation" });
     const links = within(navigation).getAllByRole("button");
-    expect(links.map((button) => button.textContent?.trim())).toEqual(["Care", "Cats", "Analytics", "Family"]);
-    await user.click(within(navigation).getByRole("button", { name: "Analytics" }));
-    expect(await screen.findByRole("heading", { name: "Analytics" })).not.toBeNull();
-    expect(navigation.classList.contains("page-analytics")).toBe(true);
-    expect(within(navigation).getByRole("button", { name: "Analytics" }).getAttribute("aria-current")).toBe("page");
+    expect(links.map((button) => button.textContent?.trim())).toEqual(["Care", "Cats", "Family"]);
+    await user.click(within(navigation).getByRole("button", { name: "Cats" }));
+    expect(await screen.findByRole("heading", { name: "Cats" })).not.toBeNull();
+    expect(navigation.classList.contains("page-cats")).toBe(true);
+    expect(within(navigation).getByRole("button", { name: "Cats" }).getAttribute("aria-current")).toBe("page");
 
     await user.click(within(navigation).getByRole("button", { name: "Family" }));
     expect(await screen.findByRole("heading", { name: "Family workspace" })).not.toBeNull();
@@ -344,20 +350,19 @@ describe("care tracking corrections", () => {
     expect(within(navigation).getByRole("button", { name: "Family" }).getAttribute("aria-current")).toBe("page");
 
     const css = readFileSync("src/index.css", "utf8");
-    expect(css).toMatch(/\.primary-nav\.page-analytics::before\s*\{\s*transform:\s*translateX\(calc\(200% \+ 6px\)\);/);
-    expect(css).toMatch(/\.primary-nav\.page-family::before\s*\{\s*transform:\s*translateX\(calc\(300% \+ 9px\)\);/);
+    expect(css).toMatch(/\.primary-nav\.page-cats::before\s*\{\s*transform:\s*translateX\(calc\(100% \+ 3px\)\);/);
+    expect(css).toMatch(/\.primary-nav\.page-family::before\s*\{\s*transform:\s*translateX\(calc\(200% \+ 6px\)\);/);
   });
 
   it("opens the chosen cat's daily analytics from the Cats page", async () => {
     const user = userEvent.setup();
     renderApp();
     await user.click(screen.getByRole("button", { name: "Cats" }));
-    await user.click(screen.getByRole("button", { name: "View Mochi analytics" }));
+    await user.click(screen.getByRole("button", { name: "Show analytics for Mochi" }));
 
-    expect(await screen.findByRole("heading", { name: "Analytics" })).not.toBeNull();
-    expect(screen.getByRole("button", { name: "Per day" }).getAttribute("aria-pressed")).toBe("true");
+    expect(await screen.findByText("Mochi · Activity each day this week")).not.toBeNull();
     expect(screen.getByRole("button", { name: "Show analytics for Mochi" }).getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByRole("button", { name: "Per week" }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByRole("button", { name: "Per week" }).getAttribute("aria-pressed")).toBe("true");
   });
 
   it("opens the care menu from the progress heart", async () => {
@@ -366,7 +371,7 @@ describe("care tracking corrections", () => {
 
     await user.click(screen.getByRole("button", { name: "Open care menu" }));
 
-    expect(screen.getByRole("dialog", { name: "What would you like to track?" })).not.toBeNull();
+    expect(screen.getByRole("dialog", { name: "Care tracker" })).not.toBeNull();
   });
 
   it("keeps the Now tap to track number in a stable slot when its digit count changes", async () => {
@@ -494,18 +499,46 @@ describe("care tracking corrections", () => {
     expect(container.querySelector(".record-card-list")?.textContent).toContain("Added 100% of a can");
   });
 
-  it("keeps the goal editor open while typing and saves the chosen quantity", async () => {
+  it("edits a care target from the care menu and saves the chosen quantity", async () => {
     const user = userEvent.setup();
     const { container } = renderApp();
-    await user.click(screen.getAllByRole("button", { name: /Edit goals|Quotas/ })[0]);
-    const dialog = screen.getByRole("heading", { name: "Daily food quotas" }).parentElement!;
-    const treatsGoal = within(dialog).getAllByRole("spinbutton")[0];
+    await user.click(screen.getByRole("button", { name: "Care Menu" }));
+    const menu = screen.getByRole("dialog", { name: "Care tracker" });
+    await user.click(within(menu).getByRole("button", { name: "Reorder care actions" }));
+    await user.click(within(menu).getByRole("button", { name: "Drag Treats to reorder, or tap to edit" }));
+    const actionDialog = await screen.findByRole("dialog", { name: "Edit care action" });
+    expect(actionDialog.parentElement?.parentElement).toBe(document.body);
+    const modalCss = readFileSync("src/index.css", "utf8");
+    expect(modalCss).toMatch(/\.track-picker-backdrop\s*\{[^}]*z-index:\s*1300;/s);
+    expect(modalCss).toMatch(/\.modal-backdrop\.action-editor-backdrop\s*\{\s*z-index:\s*1400;/);
+    const dialog = (await screen.findByRole("heading", { name: "Edit care action" })).parentElement!;
+    const treatsGoal = within(dialog).getByRole("spinbutton");
 
     await user.clear(treatsGoal);
     await user.type(treatsGoal, "6");
-    expect(screen.getByRole("heading", { name: "Daily food quotas" })).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "Edit care action" })).not.toBeNull();
     expect((treatsGoal as HTMLInputElement).value).toBe("6");
-    await user.click(within(dialog).getByRole("button", { name: "Done" }));
+    await user.click(within(dialog).getByRole("button", { name: "Save action" }));
     expect(container.querySelector(".big-tap-card .big-count")?.textContent).toContain("/ 6");
+  });
+
+  it("offers custom care actions from the last menu tile and shows direct drag handles in edit mode", async () => {
+    const user = userEvent.setup();
+    const { container } = renderApp();
+    await user.click(screen.getByRole("button", { name: "Care Menu" }));
+    let menu = screen.getByRole("dialog", { name: "Care tracker" });
+    const tiles = Array.from(menu.querySelectorAll(".care-action-tile-wrap .care-action-tile-content > button:not(.care-action-remove)"));
+    expect(tiles.at(-1)?.textContent).toContain("Pee");
+    await user.click(within(menu).getByRole("button", { name: "Add care action" }));
+    expect(await screen.findByRole("heading", { name: "Add a care action" })).not.toBeNull();
+    const addActionDialog = screen.getByRole("dialog", { name: "Add a care action" });
+    expect(addActionDialog.parentElement?.parentElement).toBe(document.body);
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Add a care action" })).toBeNull());
+    await user.click(screen.getByRole("button", { name: "Care Menu" }));
+    menu = screen.getByRole("dialog", { name: "Care tracker" });
+    await user.click(within(menu).getByRole("button", { name: "Reorder care actions" }));
+    expect(within(menu).getByRole("button", { name: "Drag Kibble to reorder, or tap to edit" })).not.toBeNull();
+    expect(menu.querySelector(".care-action-tile-wrap.is-editing")).not.toBeNull();
   });
 });
