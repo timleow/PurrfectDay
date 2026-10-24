@@ -356,7 +356,7 @@ main {
   position: fixed;
   bottom: max(14px, env(safe-area-inset-bottom));
   left: calc(50% + 122px);
-  z-index: 20;
+  z-index: 40;
   display: flex;
   width: min(520px, calc(100vw - 24px));
   justify-content: space-between;
