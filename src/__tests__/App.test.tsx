@@ -352,6 +352,9 @@ describe("care tracking corrections", () => {
     const css = readFileSync("src/index.css", "utf8");
     expect(css).toMatch(/\.primary-nav\.page-cats::before\s*\{\s*transform:\s*translateX\(calc\(100% \+ 3px\)\);/);
     expect(css).toMatch(/\.primary-nav\.page-family::before\s*\{\s*transform:\s*translateX\(calc\(200% \+ 6px\)\);/);
+    expect(css).not.toContain("route-enter");
+    expect(css).not.toContain("nav-icon-settle");
+    expect(css.match(/\.primary-nav::before\s*\{([^}]+)\}/)?.[1]).not.toMatch(/transition:/);
   });
 
   it("opens the chosen cat's daily analytics from the Cats page", async () => {

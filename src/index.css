@@ -64,18 +64,6 @@ a:focus-visible {
   z-index: 31;
 }
 
-.app-shell:not(.family-route-hidden) > main,
-.cats-page,
-.analytics-page,
-.family-portal-page {
-  animation: route-enter 10ms ease-out both;
-}
-
-@keyframes route-enter {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
 .sidebar {
   position: fixed;
   inset: 0 auto 0 0;
@@ -395,7 +383,6 @@ main {
   background: #eaf2eb;
   content: "";
   pointer-events: none;
-  transition: transform 70ms cubic-bezier(.22, 1, .36, 1), background-color 10ms ease;
 }
 
 .primary-nav.page-cats::before {
@@ -424,22 +411,10 @@ main {
   cursor: pointer;
   font-size: 11px;
   font-weight: 700;
-  transition: color .14s ease, transform .14s ease;
 }
-
-.primary-nav button:active { transform: scale(.97); }
 
 .primary-nav button.active {
   color: #4c745f;
-}
-
-.primary-nav button.active .icon {
-  animation: nav-icon-settle 100ms cubic-bezier(.22, 1, .36, 1);
-}
-
-@keyframes nav-icon-settle {
-  from { opacity: .72; transform: translateY(2px) scale(.92); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 .mobile-header {
